@@ -1,0 +1,9 @@
+terrain/
+.vscode/
+__pycache__/
+sky_vision2/__pycache__/
+sky_vision2/sky_utils2/
+eeprom.bin
+mav.parm
+mav.tlog
+mav.tlog.raw
