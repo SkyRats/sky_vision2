@@ -2,7 +2,7 @@ terrain/
 .vscode/
 __pycache__/
 sky_vision2/__pycache__/
-sky_vision2/sky_utils2/
+sky_vision2/scripts/__pycache__/
 eeprom.bin
 mav.parm
 mav.tlog
