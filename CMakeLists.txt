@@ -31,14 +31,14 @@ include_directories(include)
 
 
 # Create Cpp executable
-#add_executable(cpp_executable src/cpp_node.cpp)
-#ament_target_dependencies(cpp_executable rclcpp)
+add_executable(cpp_executable src/aruco_detector_node.cpp)
+ament_target_dependencies(cpp_executable rclcpp geometry_msgs OpenCV cv_bridge image_transport)
 
 # Install Cpp executables
-#install(TARGETS
-#  cpp_executable
-#  DESTINATION lib/${PROJECT_NAME}
-#)
+install(TARGETS
+  cpp_executable
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 
 # Install Python modules
@@ -47,7 +47,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  scripts/*.py
+  scripts/main.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
