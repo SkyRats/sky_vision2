@@ -6,7 +6,7 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(-Wall -Wextra -Wpedantic )
 endif()
 
 
@@ -22,7 +22,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 find_package(cv_bridge REQUIRED)
-find_package(OpenCV REQUIRED)
+find_package(OpenCV 4.11 REQUIRED)
 find_package(image_transport REQUIRED)
 
 
@@ -31,12 +31,12 @@ include_directories(include)
 
 
 # Create Cpp executable
-add_executable(cpp_executable src/aruco_detector_node.cpp)
-ament_target_dependencies(cpp_executable rclcpp geometry_msgs OpenCV cv_bridge image_transport)
+add_executable(aruco_node src/aruco_detector_node.cpp)
+ament_target_dependencies(aruco_node rclcpp geometry_msgs OpenCV cv_bridge sensor_msgs std_msgs)
 
 # Install Cpp executables
 install(TARGETS
-  cpp_executable
+  aruco_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
