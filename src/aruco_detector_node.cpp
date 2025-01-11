@@ -20,9 +20,8 @@ class ArucoDetector : public rclcpp::Node
       
       this->declare_parameter("camera_name", "down_cam");
       this->declare_parameter("debug", true);
-      this->declare_parameter("aruco_type", 5); // 5x5 aruco
-      this->declare_parameter("aruco_qtd_id", 250); // 0 - 249 ids
       this->declare_parameter("marker_size", 25); // 25 cm
+      this->declare_parameter("dictionary_index", 6); // 5x5 aruco
 
       topic_camera = prefix + this->get_parameter("camera_name").as_string() + "/img_raw";
       topic_id = prefix + this->get_parameter("camera_name").as_string() + "/aruco_id";
@@ -70,7 +69,7 @@ class ArucoDetector : public rclcpp::Node
       std::vector<std::vector<cv::Point2f>> corners;
 
       cv::aruco::DetectorParameters detectorParams = cv::aruco::DetectorParameters();
-      cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_5X5_250); // TODO: change to parameter 
+      cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(this->get_parameter("dictionary_index").as_int()); // TODO: change to parameter 
       cv::aruco::ArucoDetector detector(dictionary, detectorParams);
       detector.detectMarkers(frame, corners, ids);
       if (debug) RCLCPP_INFO(this->get_logger(), "Detected %d markers", (int)ids.size());
