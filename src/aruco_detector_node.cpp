@@ -112,6 +112,8 @@ class ArucoDetector : public rclcpp::Node
         // pose rotation in BODY_NED frame
         cv::Mat rot_mat;
         cv::Rodrigues(rvecs[i], rot_mat);
+
+        // TODO: get real orientation 
         pose.orientation.x = 0;
         pose.orientation.y = 0;
         pose.orientation.z = 0;
