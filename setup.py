@@ -10,6 +10,16 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/launch', [
+            'launch/zed_mavros_sitl.launch.py',
+            'launch/zed_mavros_fc.launch.py',
+            'launch/mavros_fc.launch.py',
+            'launch/zed.launch.py',
+        ]),
+        ('share/' + package_name + '/config', [
+            'config/apm_pluginlists_vision.yaml',
+            'config/fastdds_no_shm.xml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -20,7 +30,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'main = sky_vision2.main:main'
+            'main = sky_vision2.main:main',
+            'zed_mavros_bridge = sky_vision2.zed_mavros_bridge:main',
+            'test_zed_odom = sky_vision2.test_zed_odom:main',
         ],
     },
 )

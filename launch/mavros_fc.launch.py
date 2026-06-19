@@ -41,6 +41,12 @@ def generate_launch_description():
         FindPackageShare('mavros'), 'launch', 'apm_config.yaml'
     ])
 
+    zed_odom_topic_arg = DeclareLaunchArgument(
+        'zed_odom_topic',
+        default_value='/zed/zed_node/odom',
+        description='ZED ROS2 wrapper odometry topic',
+    )
+
     mavros_node = Node(
         package='mavros',
         executable='mavros_node',
@@ -59,9 +65,21 @@ def generate_launch_description():
         ],
     )
 
+    bridge_node = Node(
+        package='sky_vision2',
+        executable='zed_mavros_bridge',
+        name='zed_mavros_bridge',
+        output='screen',
+        parameters=[{
+            'zed_odom_topic': LaunchConfiguration('zed_odom_topic'),
+        }],
+    )
+
     return LaunchDescription([
         domain_id,
         no_shm,
         fcu_url_arg,
+        zed_odom_topic_arg,
         mavros_node,
+        bridge_node,
     ])
