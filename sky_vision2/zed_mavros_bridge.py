@@ -7,9 +7,12 @@ MAVROS vision_pose plugin for ArduPilot does NOT convert frames — it passes da
 directly as VISION_POSITION_ESTIMATE, which ArduPilot expects in NED
 (X=North, Y=East, Z=Down).
 
-ZED odom frame (observed on hardware): X=North, Y=West, Z=Down.
-Only Y needs negation to reach NED. X and Z are already NED-aligned.
-Quaternion: negate qy and qz (pitch and yaw signs reverse when Y flips West→East).
+ZED odom frame (observed on hardware, camera mounted inverted): X=North, Y=West, Z=Up.
+Corrections to reach NED (X=North, Y=East, Z=Down):
+  - Negate Y: West → East
+  - Negate Z: Up → Down
+Quaternion: negate qy and qz. Flipping both Y and Z is a 180° rotation around X,
+which transforms orientation as q' = (qx, -qy, -qz, qw).
 
 - Monitors EKF3 health via /mavros/estimator_status
 - Calls /mavros/cmd/set_home once EKF has been healthy for STABLE_SECS
@@ -72,16 +75,16 @@ class ZedMavrosBridge(Node):
             f'  ZED odom     : {zed_topic}\n'
             f'  Vision pose  : {pose_topic}\n'
             f'  Vision speed : {speed_topic}\n'
-            f'  Frame: ZED (X=N,Y=W,Z=D) -> NED (negate Y, flip qy/qz)\n'
+            f'  Frame: ZED inverted (X=N,Y=W,Z=U) -> NED (negate Y,Z; flip qy,qz)\n'
             f'  Home set after {STABLE_SECS}s of healthy EKF'
         )
 
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
 
-        # ZED odom: X=North, Y=West, Z=Down → NED: X=North, Y=East, Z=Down
-        # Only Y is inverted. Quaternion: negate qy (pitch) and qz (yaw)
-        # because flipping Y reverses the sign of rotations around Y and Z.
+        # ZED (inverted mount): X=North, Y=West, Z=Up → NED: X=North, Y=East, Z=Down
+        # Negate Y (West→East) and Z (Up→Down).
+        # Quaternion: flipping Y and Z = 180° rotation around X → negate qy and qz.
         qx = msg.pose.pose.orientation.x
         qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
@@ -92,7 +95,7 @@ class ZedMavrosBridge(Node):
         pose_msg.header.frame_id = 'map'
         pose_msg.pose.position.x =  msg.pose.pose.position.x   # North, unchanged
         pose_msg.pose.position.y = -msg.pose.pose.position.y   # West → East
-        pose_msg.pose.position.z =  msg.pose.pose.position.z   # Down, unchanged
+        pose_msg.pose.position.z = -msg.pose.pose.position.z   # Up → Down
         pose_msg.pose.orientation.x =  qx   # roll (around North), unchanged
         pose_msg.pose.orientation.y = -qy   # pitch sign flips with Y axis
         pose_msg.pose.orientation.z = -qz   # yaw sign flips with Y axis
@@ -104,7 +107,7 @@ class ZedMavrosBridge(Node):
         speed_msg.header.frame_id = 'map'
         speed_msg.twist.linear.x  =  msg.twist.twist.linear.x
         speed_msg.twist.linear.y  = -msg.twist.twist.linear.y
-        speed_msg.twist.linear.z  =  msg.twist.twist.linear.z
+        speed_msg.twist.linear.z  = -msg.twist.twist.linear.z
         self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1
