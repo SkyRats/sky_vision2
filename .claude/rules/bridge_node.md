@@ -42,9 +42,7 @@ ZED odom frame in the SkyRats mounting configuration:
 | Y | West | East | negate Y |
 | Z | Down | Down | none |
 
-The bridge should negate only Y. See `~/imav_2026_ws/.claude/rules/coordinate_frames.md` for the verified NED correction math and quaternion treatment.
-
-**Note:** The current code in `zed_mavros_bridge.py` negates both X and Y (180° Z rotation). This predates confirmation that MAVROS with APM does not auto-convert ENU→NED. Review and test any frame correction changes against actual flight behavior before committing.
+The bridge negates only Y (and qy, qz in the quaternion). See `~/imav_2026_ws/.claude/rules/coordinate_frames.md` for the verified NED correction math and quaternion treatment.
 
 ## EKF watchdog and auto-home
 
