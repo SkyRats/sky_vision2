@@ -75,10 +75,6 @@ ros2 topic hz /mavros/vision_speed/speed_twist  # ~30 Hz
 # Bridge log must show: "HOME SET from vision EKF — ready to arm"
 ```
 
-## Cross-workspace usage
+## Workspace
 
-This package is installed in two workspaces:
-- **`~/imav_2026_ws/`** — production (real hardware flights)
-- **`~/sky_ws2/`** — development (SITL, testing)
-
-Both workspaces contain identical copies of `sky_vision2` as a git submodule tracking the `imav_2026` branch on `github.com/SkyRats/sky_vision2`. Changes must be committed and pushed from the submodule directory, then the workspace's submodule pointer updated.
+This package lives in `~/sky_ws2/src/sky_vision2/` as a git submodule tracking the `imav_2026` branch on `github.com/SkyRats/sky_vision2`. Changes must be committed and pushed from the submodule directory, then the workspace's submodule pointer updated.

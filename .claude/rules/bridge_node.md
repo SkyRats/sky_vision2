@@ -42,7 +42,7 @@ ZED odom frame in the SkyRats mounting configuration:
 | Y | West | East | negate Y |
 | Z | Down | Down | none |
 
-The bridge negates only Y (and qy, qz in the quaternion). See `~/imav_2026_ws/.claude/rules/coordinate_frames.md` for the verified NED correction math and quaternion treatment.
+The bridge negates only Y (and qy, qz in the quaternion).
 
 ## EKF watchdog and auto-home
 
@@ -57,11 +57,11 @@ Keep the drone **stationary** for the first ~20 s after launch so the EKF conver
 
 ## Bridge exclusivity
 
-Never run `ZedMavrosBridge` and `pose_relay` (indoor_2026 in imav_2026_ws) simultaneously — both publish to `/mavros/vision_pose/pose` and will corrupt the EKF. Check before launching:
+Both `sky_vision2` and `indoor_2026` expose a `zed_mavros_bridge` executable. Never run both simultaneously — both publish to `/mavros/vision_pose/pose` and will corrupt the EKF. Check before launching:
 
 ```bash
-ros2 node list | grep -E "pose_relay|zed_mavros_bridge"
-# must show 0 or 1, never both
+ros2 node list | grep zed_mavros_bridge
+# must show exactly one
 ```
 
 ## test_zed_odom utility

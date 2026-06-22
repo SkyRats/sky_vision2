@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `sky_vision2` is the **production vision stack** for the SkyRats IMAV 2026 drone. It bridges ZED2i camera odometry into ArduPilot's EKF3 via MAVROS, providing visual odometry-based position and velocity estimates for indoor GPS-denied flight.
 
-Used in both `~/imav_2026_ws/` (hardware flights) and `~/sky_ws2/` (development/SITL).
+Lives in `~/sky_ws2/src/sky_vision2/` — the only workspace.
 
 ## Executables
 
@@ -18,8 +18,7 @@ Used in both `~/imav_2026_ws/` (hardware flights) and `~/sky_ws2/` (development/
 ## Build and run
 
 ```bash
-# From either workspace (imav_2026_ws for hardware, sky_ws2 for dev):
-cd ~/imav_2026_ws   # or ~/sky_ws2
+cd ~/sky_ws2
 colcon build --packages-select sky_vision2
 source install/setup.bash
 
@@ -142,5 +141,4 @@ Both `ZedMavrosBridge` (this package) and `pose_relay` (`indoor_2026`) publish o
 
 - `.claude/rules/bridge_node.md` — full node API, frame math, EKF watchdog
 - `.claude/rules/launch_and_config.md` — launch variants, FastDDS, FCU parameters
-- `~/imav_2026_ws/CLAUDE.md` — production workspace context
-- `~/sky_ws2/CLAUDE.md` — dev/sim workspace context
+- `~/sky_ws2/CLAUDE.md` — workspace context
