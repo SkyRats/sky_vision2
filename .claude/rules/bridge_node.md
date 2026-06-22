@@ -34,15 +34,23 @@ When using MAVROS with `apm.launch` (ArduPilot), the `vision_pose` plugin passes
 
 ## Frame transformation
 
-ZED odom frame in the SkyRats mounting configuration:
+ZED is mounted **inverted** on the drone. Observed hardware axes:
 
 | Axis | ZED direction | NED target | Correction |
 |------|--------------|------------|-----------|
 | X | North | North | none |
 | Y | West | East | negate Y |
-| Z | Down | Down | none |
+| Z | Up | Down | negate Z |
 
-The bridge negates only Y (and qy, qz in the quaternion).
+Flipping Y and Z together is a 180° rotation around X (proper rotation, det = +1).
+Quaternion: `q' = (qx, -qy, -qz, qw)` — negate qy and qz, leave qx and qw unchanged.
+
+### Known issue — yaw incorrect (TODO)
+
+Position (X, Y, Z) and velocity are verified correct on hardware.
+**Yaw is wrong** — the quaternion yaw component does not match the physical heading.
+Root cause not yet determined. Do not use yaw from EKF3 until this is resolved.
+Tracking: fix yaw in `zed_mavros_bridge.py`.
 
 ## EKF watchdog and auto-home
 
