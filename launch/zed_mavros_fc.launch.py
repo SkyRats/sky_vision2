@@ -86,8 +86,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'zed_odom_topic': LaunchConfiguration('zed_odom_topic'),
-            'mavros_vision_pose_topic': '/mavros/mavros/pose',
-            'mavros_vision_speed_topic': '/mavros/mavros/speed_twist',
         }],
     )
 

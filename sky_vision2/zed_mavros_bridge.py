@@ -4,9 +4,10 @@ ZED camera odometry to MAVROS bridge with automatic home setting.
 ZED outputs in its own frame. ArduPilot expects NED (North-East-Down).
 MAVROS vision_pose plugin expects ENU (East-North-Up) and converts to NED.
 
-ZED odom follows ROS REP-105 — already ENU (East-North-Up).
-MAVROS vision_pose plugin converts ENU → NED for ArduPilot automatically.
-No coordinate transformation needed in this node.
+ZED odom frame has both X and Y axes inverted relative to ROS ENU (equivalent
+to a 180° rotation around Z). position.x, position.y, twist.linear.x, and
+twist.linear.y are negated, and the orientation quaternion is rotated 180° around Z
+before publishing. MAVROS vision_pose plugin then converts ENU → NED automatically.
 
 - Monitors EKF3 health via /mavros/estimator_status
 - Calls /mavros/cmd/set_home once EKF has been healthy for STABLE_SECS
@@ -75,18 +76,32 @@ class ZedMavrosBridge(Node):
 
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
+
+        # 180° rotation around Z: negate X and Y, rotate quaternion
+        qx = msg.pose.pose.orientation.x
+        qy = msg.pose.pose.orientation.y
+        qz = msg.pose.pose.orientation.z
+        qw = msg.pose.pose.orientation.w
+
         pose_msg = PoseStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = 'map'
-        pose_msg.pose            = msg.pose.pose
         pose_msg.pose.position.x = -msg.pose.pose.position.x
+        pose_msg.pose.position.y = -msg.pose.pose.position.y
+        pose_msg.pose.position.z =  msg.pose.pose.position.z
+        # q_result = q_z180 * q_orig, q_z180 = (0, 0, 1, 0)
+        pose_msg.pose.orientation.x = -qy
+        pose_msg.pose.orientation.y =  qx
+        pose_msg.pose.orientation.z =  qw
+        pose_msg.pose.orientation.w = -qz
         self._pose_pub.publish(pose_msg)
 
         speed_msg = TwistStamped()
         speed_msg.header.stamp    = stamp
         speed_msg.header.frame_id = 'map'
-        speed_msg.twist           = msg.twist.twist
         speed_msg.twist.linear.x  = -msg.twist.twist.linear.x
+        speed_msg.twist.linear.y  = -msg.twist.twist.linear.y
+        speed_msg.twist.linear.z  =  msg.twist.twist.linear.z
         self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1
