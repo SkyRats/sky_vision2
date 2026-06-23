@@ -3,9 +3,9 @@ ZED camera odometry to MAVROS bridge with automatic home setting.
 
 ZED outputs in its own frame. ArduPilot expects NED (North-East-Down).
 
-MAVROS vision_pose plugin for ArduPilot does NOT convert frames — it passes data
-directly as VISION_POSITION_ESTIMATE, which ArduPilot expects in NED
-(X=North, Y=East, Z=Down).
+Uses MAVROS mocap_pose_estimate plugin which sends ATT_POS_MOCAP (full quaternion).
+This avoids the yaw-folding bug in vision_pose (Eigen eulerAngles limits yaw to [0,π]).
+ArduPilot expects NED (X=North, Y=East, Z=Down); no frame conversion in APM mode.
 
 ZED odom frame (observed on hardware, camera mounted inverted): X=North, Y=West, Z=Up.
 Corrections to reach NED (X=North, Y=East, Z=Down):
@@ -43,7 +43,7 @@ class ZedMavrosBridge(Node):
         super().__init__('zed_mavros_bridge')
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
-        self.declare_parameter('mavros_vision_pose_topic', '/mavros/vision_pose/pose')
+        self.declare_parameter('mavros_vision_pose_topic', '/mavros/mocap/pose')
         self.declare_parameter('mavros_vision_speed_topic', '/mavros/vision_speed/speed_twist')
 
         zed_topic   = self.get_parameter('zed_odom_topic').get_parameter_value().string_value

@@ -12,7 +12,7 @@
 |-----------|-------|------|-----|
 | Subscribes | `zed_odom_topic` param (default `/zed/zed_node/odom`) | `nav_msgs/Odometry` | BEST_EFFORT, VOLATILE, depth=10 |
 | Subscribes | `/mavros/estimator_status` | `mavros_msgs/EstimatorStatus` | RELIABLE (default) |
-| Publishes | `mavros_vision_pose_topic` param (default `/mavros/vision_pose/pose`) | `geometry_msgs/PoseStamped` | RELIABLE (default) |
+| Publishes | `mavros_vision_pose_topic` param (default `/mavros/mocap/pose`) | `geometry_msgs/PoseStamped` | RELIABLE (default) |
 | Publishes | `mavros_vision_speed_topic` param (default `/mavros/vision_speed/speed_twist`) | `geometry_msgs/TwistStamped` | RELIABLE (default) |
 | Service client | `/mavros/cmd/set_home` | `mavros_msgs/srv/CommandHome` | async |
 
@@ -23,14 +23,20 @@
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `zed_odom_topic` | `/zed/zed_node/odom` | Change if using a non-standard ZED namespace |
-| `mavros_vision_pose_topic` | `/mavros/vision_pose/pose` | Feeds EKF3 position |
+| `mavros_vision_pose_topic` | `/mavros/mocap/pose` | Feeds EKF3 position via `mocap_pose_estimate` plugin |
 | `mavros_vision_speed_topic` | `/mavros/vision_speed/speed_twist` | Feeds EKF3 velocity |
 
 ## CRITICAL: MAVROS does NOT convert ENU→NED for ArduPilot
 
-When using MAVROS with `apm.launch` (ArduPilot), the `vision_pose` plugin passes `PoseStamped` data **directly** as `VISION_POSITION_ESTIMATE` without any ENU→NED conversion. ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down).
+When using MAVROS with ArduPilot (APM mode), the `mocap_pose_estimate` plugin passes `PoseStamped` data **directly** as `ATT_POS_MOCAP` without any ENU→NED conversion. ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down).
 
 **The bridge must publish NED, not ENU.** Do not assume MAVROS will handle the conversion.
+
+## Why `mocap_pose_estimate` instead of `vision_pose`
+
+The `vision_pose` plugin extracts yaw from the incoming quaternion using Eigen's `eulerAngles(2,1,0)`, which returns yaw only in [0, π]. Any heading past 180° (West side of compass) folds back toward 0° instead of wrapping to negative — making the EKF think the drone faces East when it faces West.
+
+`mocap_pose_estimate` sends `ATT_POS_MOCAP` with a full quaternion (`q[4]`), bypassing the Euler extraction entirely. ArduPilot's `AP_ExternalNav_MAV` backend handles both messages identically — same EKF3 source parameters apply.
 
 ## Frame transformation
 
@@ -45,12 +51,9 @@ ZED is mounted **inverted** on the drone. Observed hardware axes:
 Flipping Y and Z together is a 180° rotation around X (proper rotation, det = +1).
 Quaternion: `q' = (qx, -qy, -qz, qw)` — negate qy and qz, leave qx and qw unchanged.
 
-### Known issue — yaw incorrect (TODO)
+### Yaw
 
-Position (X, Y, Z) and velocity are verified correct on hardware.
-**Yaw is wrong** — the quaternion yaw component does not match the physical heading.
-Root cause not yet determined. Do not use yaw from EKF3 until this is resolved.
-Tracking: fix yaw in `zed_mavros_bridge.py`.
+Yaw is sent as a full quaternion via `ATT_POS_MOCAP`. The range is [-π, π] (full compass coverage). Position and velocity are verified correct on hardware; quaternion yaw fix awaits hardware verification.
 
 ## EKF watchdog and auto-home
 
@@ -65,7 +68,7 @@ Keep the drone **stationary** for the first ~20 s after launch so the EKF conver
 
 ## Bridge exclusivity
 
-Both `sky_vision2` and `indoor_2026` expose a `zed_mavros_bridge` executable. Never run both simultaneously — both publish to `/mavros/vision_pose/pose` and will corrupt the EKF. Check before launching:
+Both `sky_vision2` and `indoor_2026` expose a `zed_mavros_bridge` executable. Never run both simultaneously — they publish to the same MAVROS pose topic and will corrupt the EKF. Check before launching:
 
 ```bash
 ros2 node list | grep zed_mavros_bridge

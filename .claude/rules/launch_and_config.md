@@ -42,10 +42,10 @@ Only essential plugins are loaded to reduce overhead:
 
 ```
 sys_status, sys_time, command, local_position, global_position,
-home_position, imu, vision_pose, vision_speed
+home_position, imu, mocap_pose_estimate, vision_speed
 ```
 
-`vision_pose` consumes `/mavros/vision_pose/pose` → `VISION_POSITION_ESTIMATE` MAVLink message.
+`mocap_pose_estimate` consumes `/mavros/mocap/pose` → `ATT_POS_MOCAP` MAVLink message (full quaternion, avoids Eigen yaw-folding bug in `vision_pose`).
 `vision_speed` consumes `/mavros/vision_speed/speed_twist` → `VISION_SPEED_ESTIMATE` MAVLink message.
 
 ## Required ArduPilot FCU parameters

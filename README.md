@@ -45,7 +45,7 @@ The main node. Runs continuously during flight.
 
 | Topic | What it is |
 |-------|-----------|
-| `/mavros/vision_pose/pose` | Drone position in NED → feeds ArduPilot EKF3 |
+| `/mavros/mocap/pose` | Drone pose (position + quaternion) in NED → feeds ArduPilot EKF3 via `ATT_POS_MOCAP` |
 | `/mavros/vision_speed/speed_twist` | Drone velocity in NED → feeds ArduPilot EKF3 |
 
 **Startup sequence:**
@@ -114,13 +114,13 @@ ros2 run sky_vision2 test_zed_odom
 **Terminal 3** — verify data is flowing:
 ```bash
 export ROS_DOMAIN_ID=42
-ros2 topic hz /mavros/vision_pose/pose        # should be ~30 Hz
+ros2 topic hz /mavros/mocap/pose              # should be ~30 Hz
 ros2 topic hz /mavros/vision_speed/speed_twist # should be ~30 Hz
 ```
 
 ## Coordinate frame note
 
-The ZED camera outputs X=North, Y=West, Z=Down. ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down). The bridge fixes this by negating Y position, Y velocity, and the Y and Z parts of the rotation quaternion.
+The ZED2i is mounted **inverted** on the drone, outputting X=North, Y=West, Z=Up. ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down). The bridge negates Y and Z for position and velocity, and negates qy and qz in the quaternion (equivalent to a 180° rotation around X).
 
 MAVROS does **not** do this conversion automatically when used with ArduPilot — the bridge must send NED directly.
 

@@ -4,16 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this package does
 
-`sky_vision2` is the **production vision stack** for the SkyRats IMAV 2026 drone. It bridges ZED2i camera odometry into ArduPilot's EKF3 via MAVROS, providing visual odometry-based position and velocity estimates for indoor GPS-denied flight.
+`sky_vision2` bridges ZED2i camera odometry into ArduPilot's EKF3 via MAVROS for GPS-denied indoor flight. It lives in `~/sky_ws2/src/sky_vision2/` as a git submodule (`imav_2026` branch).
 
-Lives in `~/sky_ws2/src/sky_vision2/` — the only workspace.
-
-## Executables
-
-| Executable | Source | Purpose |
-|-----------|--------|---------|
-| `zed_mavros_bridge` | `sky_vision2/zed_mavros_bridge.py` | Production bridge: ZED odom → MAVROS pose + velocity, EKF watchdog, auto set_home |
-| `test_zed_odom` | `sky_vision2/test_zed_odom.py` | Synthetic circular-trajectory odom publisher for offline testing |
+```
+ZED2i  →  /zed/zed_node/odom  →  ZedMavrosBridge  →  MAVROS  →  ArduPilot EKF3
+                                    (frame fix)         mocap       (ExternalNav)
+```
 
 ## Build and run
 
@@ -21,124 +17,99 @@ Lives in `~/sky_ws2/src/sky_vision2/` — the only workspace.
 cd ~/sky_ws2
 colcon build --packages-select sky_vision2
 source install/setup.bash
+export ROS_DOMAIN_ID=42
 
 # Full hardware stack
 ros2 launch sky_vision2 zed_mavros_fc.launch.py
 
-# Bridge + MAVROS only (ZED running separately)
+# MAVROS + bridge only (ZED already running)
 ros2 launch sky_vision2 mavros_fc.launch.py
 
-# ZED only
-ros2 launch sky_vision2 zed.launch.py
-
-# Offline test (no hardware)
-ros2 run sky_vision2 zed_mavros_bridge   # terminal 1
-ros2 run sky_vision2 test_zed_odom       # terminal 2
+# Offline test — no hardware needed
+ros2 run sky_vision2 test_zed_odom   # terminal 1 (publishes synthetic odom)
+ros2 run sky_vision2 zed_mavros_bridge  # terminal 2
 ```
 
-All terminals need `export ROS_DOMAIN_ID=42`.
+Wait for: `HOME SET from vision EKF — ready to arm` before arming.
 
-## Run tests
+## Tests
+
+Only linting tests exist (no logic unit tests):
 
 ```bash
 colcon test --packages-select sky_vision2
 colcon test-result --verbose
 ```
 
-## Architecture: ZedMavrosBridge
+## Architecture
 
-### Topics
+### Executables
 
-| Direction | Topic | Type | Notes |
-|-----------|-------|------|-------|
-| Sub | `/zed/zed_node/odom` | `nav_msgs/Odometry` | BEST_EFFORT QoS — must match ZED driver |
-| Sub | `/mavros/estimator_status` | `mavros_msgs/EstimatorStatus` | EKF health, for auto-home |
-| Pub | `/mavros/vision_pose/pose` | `geometry_msgs/PoseStamped` | → `VISION_POSITION_ESTIMATE` → EKF3 |
-| Pub | `/mavros/vision_speed/speed_twist` | `geometry_msgs/TwistStamped` | → `VISION_SPEED_ESTIMATE` → EKF3 |
-| Service | `/mavros/cmd/set_home` | `mavros_msgs/CommandHome` | Called once after 5s stable EKF |
+| Executable | Source | Role |
+|-----------|--------|------|
+| `zed_mavros_bridge` | `sky_vision2/zed_mavros_bridge.py` | Production bridge — runs during every flight |
+| `test_zed_odom` | `sky_vision2/test_zed_odom.py` | Synthetic circular odom at 30 Hz for offline testing |
 
-### QoS — critical detail
+### Critical: ZED coordinate frame (inverted mount)
 
-The ZED wrapper publishes odom with **BEST_EFFORT** reliability. The bridge subscription must use the same profile or it will receive no messages (ROS2 silently drops incompatible QoS matches):
+The ZED2i is mounted **upside down**. Hardware-observed output frame: X=North, Y=West, Z=Up.
+ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down).
 
 ```python
-sensor_qos = QoSProfile(
-    reliability=QoSReliabilityPolicy.BEST_EFFORT,
-    history=QoSHistoryPolicy.KEEP_LAST,
-    durability=QoSDurabilityPolicy.VOLATILE,
-    depth=10,
-)
+position.x =  x        # North — unchanged
+position.y = -y        # West → East
+position.z = -z        # Up → Down
+# Quaternion: flipping Y+Z = 180° rotation around X
+q = (qx, -qy, -qz, qw)
 ```
 
-### Frame correction
+**MAVROS with ArduPilot (`apm.launch`) does NOT auto-convert ENU→NED.** The bridge must publish NED directly.
 
-**MAVROS with ArduPilot (`apm.launch`) does NOT convert ENU→NED.** The `vision_pose` plugin passes `PoseStamped` data directly as `VISION_POSITION_ESTIMATE`. ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down). The bridge must publish NED.
+### Critical: QoS
 
-ZED odom frame (hardware-observed): X=North, Y=West, Z=Down. Only Y needs negation:
+ZED publishes odom with **BEST_EFFORT** reliability. The bridge subscription must match — ROS2 silently drops mismatched QoS connections.
 
-```python
-position.x =  zed.position.x   # North, unchanged
-position.y = -zed.position.y   # West → East
-position.z =  zed.position.z   # Down, unchanged
+### Critical: mocap plugin for correct yaw
 
-# Quaternion: flipping Y reverses rotations around Y (pitch) and Z (yaw)
-q.x =  qx   # unchanged
-q.y = -qy   # pitch sign flips
-q.z = -qz   # yaw sign flips
-q.w =  qw
-```
+The `vision_pose` MAVROS plugin extracts yaw via Eigen's `eulerAngles()` which returns values only in [0, π] — yaw over 180° folds back toward 0 instead of wrapping to -π. This breaks heading for any Western heading.
 
-See `.claude/rules/bridge_node.md` for full details.
+`config/apm_pluginlists_vision.yaml` uses `mocap_pose_estimate` instead, which sends `ATT_POS_MOCAP` (full quaternion, no Euler extraction) to ArduPilot. Same `AP_ExternalNav_MAV` backend — same EKF3 source params apply.
+
+Bridge publishes to `/mavros/mocap/pose` (configurable via `mavros_vision_pose_topic` param).
 
 ### EKF home watchdog
 
-The bridge monitors `/mavros/estimator_status.pos_horiz_rel`. Once it stays `True` for 5 continuous seconds, it calls `set_home`. If the flag drops the countdown resets. The log line `"HOME SET from vision EKF — ready to arm"` confirms success. Keep the drone **stationary for the first ~20 s** after launch.
+The bridge monitors `/mavros/estimator_status.pos_horiz_rel`. Once it stays `True` for 5 s, it calls `set_home`. Keep the drone **stationary for ~20 s** after launch.
 
-## Launch file matrix
+### FastDDS shared-memory
 
-| File | ROS_DOMAIN_ID | FastDDS no-SHM | ZED | MAVROS | Bridge |
-|------|:---:|:---:|:---:|:---:|:---:|
-| `zed_mavros_fc.launch.py` | 42 | YES | yes | yes | yes |
-| `mavros_fc.launch.py` | 42 | YES | — | yes | yes |
-| `zed.launch.py` | 42 | — | yes | — | — |
-| `zed_mavros_sitl.launch.py` | 42 | NO | yes | yes | yes |
+After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topics to appear active but carry no data. `config/fastdds_no_shm.xml` disables SHM transport — the production launch files (`zed_mavros_fc.launch.py`, `mavros_fc.launch.py`) set this automatically. `zed_mavros_sitl.launch.py` does **not** — clear manually with `rm -f /dev/shm/fastrtps_*` or use `mavros_fc.launch.py fcu_url:=tcp://127.0.0.1:5760` for SITL.
 
-`zed_mavros_sitl.launch.py` does **not** set `FASTRTPS_DEFAULT_PROFILES_FILE`. Before restarting MAVROS under this launch file, clear stale SHM entries:
+### Bridge exclusivity
 
-```bash
-rm -f /dev/shm/fastrtps_*
-```
+`indoor_2026` also has a `ZedMavrosBridge`. **Never run both simultaneously** — duplicate messages corrupt the EKF. Verify: `ros2 node list | grep zed_mavros_bridge` must show exactly one.
 
-Or set it in the terminal before launch:
-```bash
-export FASTRTPS_DEFAULT_PROFILES_FILE=$(ros2 pkg prefix sky_vision2)/share/sky_vision2/config/fastdds_no_shm.xml
-```
+## Launch arguments
 
-## Config files
+| Argument | Default | Notes |
+|----------|---------|-------|
+| `fcu_url` | `/dev/ttyTHS1:921600` | Jetson Telem2 UART; use `tcp://127.0.0.1:5760` for SITL |
+| `camera_model` | `zed2i` | ZED model string |
+| `zed_odom_topic` | `/zed/zed_node/odom` | ZED odom topic |
 
-### `config/apm_pluginlists_vision.yaml`
-MAVROS plugin allowlist — loads only the plugins needed for visual odometry.
+## Required ArduPilot FCU parameters
 
-### `config/fastdds_no_shm.xml`
-Disables DDS shared-memory transport. Prevents stale type-signature entries in `/dev/shm` from causing topics to silently carry no data after MAVROS restarts.
-
-## Startup verification
-
-```bash
-export ROS_DOMAIN_ID=42
-ros2 topic echo /mavros/state --once          # connected: True
-ros2 topic hz /zed/zed_node/odom             # ~30 Hz (appears after ~15 s)
-ros2 topic hz /mavros/vision_pose/pose       # ~30 Hz
-ros2 topic hz /mavros/vision_speed/speed_twist  # ~30 Hz
-# Bridge log: "HOME SET from vision EKF — ready to arm"
-```
-
-## Never run sky_vision2 and indoor_2026 bridges simultaneously
-
-Both `ZedMavrosBridge` (this package) and `pose_relay` (`indoor_2026`) publish on `/mavros/vision_pose/pose`. Running both produces duplicate messages that confuse the EKF. Only one bridge should be active at any time.
+| Parameter | Value |
+|-----------|-------|
+| `EK3_SRC1_POSXY` | `6` (ExternalNav) |
+| `EK3_SRC1_VELXY` | `6` (ExternalNav) |
+| `EK3_SRC1_POSZ` | `1` (Baro) |
+| `EK3_SRC1_VELZ` | `0` (None) |
+| `EK3_SRC1_YAW` | `6` (ExternalNav) |
+| `VISO_TYPE` | `1` |
 
 ## See also
 
-- `.claude/rules/bridge_node.md` — full node API, frame math, EKF watchdog
-- `.claude/rules/launch_and_config.md` — launch variants, FastDDS, FCU parameters
-- `~/sky_ws2/CLAUDE.md` — workspace context
+- `.claude/rules/bridge_node.md` — full topic/parameter reference and EKF watchdog details
+- `.claude/rules/launch_and_config.md` — launch variants, FastDDS, config files
+- `~/sky_ws2/CLAUDE.md` — workspace context (build, SITL workflow, submodule management)
