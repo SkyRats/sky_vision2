@@ -10,5 +10,5 @@
       - global_position
       - home_position
       - imu
-      - mocap_pose_estimate
+      - vision_pose
       - vision_speed

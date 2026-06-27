@@ -2,17 +2,27 @@
 ZED camera odometry to MAVROS bridge with automatic home setting.
 
 ZED outputs in its own frame. ArduPilot expects NED (North-East-Down).
+MAVROS vision_pose plugin expects ENU (East-North-Up) and converts to NED.
 
-Uses MAVROS mocap_pose_estimate plugin which sends ATT_POS_MOCAP (full quaternion).
-This avoids the yaw-folding bug in vision_pose (Eigen eulerAngles limits yaw to [0,π]).
-ArduPilot expects NED (X=North, Y=East, Z=Down); no frame conversion in APM mode.
+ZED odom follows ROS REP-105 — already ENU (East-North-Up).
+MAVROS vision_pose plugin converts ENU → NED for ArduPilot automatically.
 
-ZED odom frame (observed on hardware, camera mounted inverted): X=North, Y=West, Z=Up.
-Corrections to reach NED (X=North, Y=East, Z=Down):
-  - Negate Y: West → East
-  - Negate Z: Up → Down
-Quaternion: negate qy and qz. Flipping both Y and Z is a 180° rotation around X,
-which transforms orientation as q' = (qx, -qy, -qz, qw).
+NED alignment offset
+--------------------
+ZED always boots with identity orientation (ENU yaw = 0, i.e. the camera's
+physical forward direction is treated as ENU East).  MAVROS then converts
+ENU yaw=0 → NED yaw=π/2 (East), so ArduPilot would see the drone nose
+pointing East instead of North at startup.
+
+To fix this, every ZED pose is left-multiplied by a +π/2-around-Z quaternion
+before being forwarded.  This shifts ENU yaw by +π/2 so MAVROS outputs
+NED yaw=0 — the drone's boot-time nose direction becomes NED North.
+
+    q_offset = (w=√2/2, x=0, y=0, z=√2/2)   [+π/2 around Z]
+    q_sent   = q_offset * q_zed
+    p_sent   = R(+π/2) * p_zed  →  (x,y) → (−y, x)
+
+All subsequent yaw deltas track correctly; only the zero-reference changes.
 
 - Monitors EKF3 health via /mavros/estimator_status
 - Calls /mavros/cmd/set_home once EKF has been healthy for STABLE_SECS
@@ -26,6 +36,8 @@ Required ArduPilot parameters:
     VISO_TYPE      = 1
 """
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
@@ -37,13 +49,17 @@ from mavros_msgs.srv import CommandHome
 
 STABLE_SECS = 5.0
 
+# +π/2 rotation around Z: aligns ZED's initial forward direction with NED North.
+# q_offset = (w=√2/2, x=0, y=0, z=√2/2)
+_HALF_SQRT2 = math.sqrt(2.0) / 2.0
+
 
 class ZedMavrosBridge(Node):
     def __init__(self):
         super().__init__('zed_mavros_bridge')
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
-        self.declare_parameter('mavros_vision_pose_topic', '/mavros/mocap/pose')
+        self.declare_parameter('mavros_vision_pose_topic', '/mavros/vision_pose/pose')
         self.declare_parameter('mavros_vision_speed_topic', '/mavros/vision_speed/speed_twist')
 
         zed_topic   = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
@@ -75,39 +91,49 @@ class ZedMavrosBridge(Node):
             f'  ZED odom     : {zed_topic}\n'
             f'  Vision pose  : {pose_topic}\n'
             f'  Vision speed : {speed_topic}\n'
-            f'  Frame: ZED inverted (X=N,Y=W,Z=U) -> NED (negate Y,Z; flip qy,qz)\n'
+            f'  Frame: ZED ENU + NED-align offset (+π/2 Z) -> MAVROS NED\n'
+            f'  Boot-time nose direction = NED North (yaw=0)\n'
             f'  Home set after {STABLE_SECS}s of healthy EKF'
         )
 
+    def _apply_ned_align(self, pose):
+        """Left-multiply pose by q_offset(+π/2 around Z) so boot-time nose = NED North.
+
+        Position:    (x, y, z) → (−y, x, z)      [R(+π/2) around Z]
+        Orientation: q_new = q_offset * q_zed
+                     q_offset = (w=√2/2, x=0, y=0, z=√2/2)
+
+        Derivation:
+          ZED boot → ENU yaw=0 → MAVROS → NED yaw=π/2 (East, not North).
+          Adding +π/2 to ENU yaw → NED yaw=0 (North). Done by left-multiplying
+          with q_offset, which is equivalent to rotating the world frame +π/2
+          around Z before MAVROS applies its own ENU→NED transform.
+        """
+        x, y = pose.position.x, pose.position.y
+        pose.position.x = -y
+        pose.position.y =  x
+
+        s = _HALF_SQRT2
+        w, qx, qy, qz = (pose.orientation.w, pose.orientation.x,
+                          pose.orientation.y, pose.orientation.z)
+        pose.orientation.w = s * (w  - qz)
+        pose.orientation.x = s * (qx - qy)
+        pose.orientation.y = s * (qx + qy)
+        pose.orientation.z = s * (w  + qz)
+
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
-
-        # ZED (inverted mount): X=North, Y=West, Z=Up → NED: X=North, Y=East, Z=Down
-        # Negate Y (West→East) and Z (Up→Down).
-        # Quaternion: flipping Y and Z = 180° rotation around X → negate qy and qz.
-        qx = msg.pose.pose.orientation.x
-        qy = msg.pose.pose.orientation.y
-        qz = msg.pose.pose.orientation.z
-        qw = msg.pose.pose.orientation.w
-
         pose_msg = PoseStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = 'map'
-        pose_msg.pose.position.x =  msg.pose.pose.position.x   # North, unchanged
-        pose_msg.pose.position.y = -msg.pose.pose.position.y   # West → East
-        pose_msg.pose.position.z = -msg.pose.pose.position.z   # Up → Down
-        pose_msg.pose.orientation.x =  qx   # roll (around North), unchanged
-        pose_msg.pose.orientation.y = -qy   # pitch sign flips with Y axis
-        pose_msg.pose.orientation.z = -qz   # yaw sign flips with Y axis
-        pose_msg.pose.orientation.w =  qw
+        pose_msg.pose            = msg.pose.pose
+        self._apply_ned_align(pose_msg.pose)
         self._pose_pub.publish(pose_msg)
 
         speed_msg = TwistStamped()
         speed_msg.header.stamp    = stamp
         speed_msg.header.frame_id = 'map'
-        speed_msg.twist.linear.x  =  msg.twist.twist.linear.x
-        speed_msg.twist.linear.y  = -msg.twist.twist.linear.y
-        speed_msg.twist.linear.z  = -msg.twist.twist.linear.z
+        speed_msg.twist           = msg.twist.twist
         self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1

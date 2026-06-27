@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 ZED2i  →  /zed/zed_node/odom  →  ZedMavrosBridge  →  MAVROS  →  ArduPilot EKF3
-                                    (frame fix)         mocap       (ExternalNav)
+                                    (NED-align offset)   ENU→NED    (ExternalNav)
 ```
 
 ## Build and run
@@ -26,8 +26,8 @@ ros2 launch sky_vision2 zed_mavros_fc.launch.py
 ros2 launch sky_vision2 mavros_fc.launch.py
 
 # Offline test — no hardware needed
-ros2 run sky_vision2 test_zed_odom   # terminal 1 (publishes synthetic odom)
-ros2 run sky_vision2 zed_mavros_bridge  # terminal 2
+ros2 run sky_vision2 zed_mavros_bridge   # terminal 1
+ros2 run sky_vision2 test_zed_odom       # terminal 2
 ```
 
 Wait for: `HOME SET from vision EKF — ready to arm` before arming.
@@ -50,44 +50,34 @@ colcon test-result --verbose
 | `zed_mavros_bridge` | `sky_vision2/zed_mavros_bridge.py` | Production bridge — runs during every flight |
 | `test_zed_odom` | `sky_vision2/test_zed_odom.py` | Synthetic circular odom at 30 Hz for offline testing |
 
-### Critical: ZED coordinate frame (inverted mount)
+### Frame convention
 
-The ZED2i is mounted **upside down**. Hardware-observed output frame: X=North, Y=West, Z=Up.
-ArduPilot EKF3 expects NED (X=North, Y=East, Z=Down).
+ZED odom follows ROS REP-105 (ENU). MAVROS `vision_pose_estimate` plugin converts ENU→NED automatically before sending `VISION_POSITION_ESTIMATE` to ArduPilot. **The bridge does not manually convert frames.**
+
+The bridge applies a single NED alignment offset (+π/2 around Z) so ArduPilot sees NED yaw=0 (boot-time nose = NED North) instead of yaw=π/2 (East):
 
 ```python
-position.x =  x        # North — unchanged
-position.y = -y        # West → East
-position.z = -z        # Up → Down
-# Quaternion: flipping Y+Z = 180° rotation around X
-q = (qx, -qy, -qz, qw)
+# position: (x, y, z) → (−y, x, z)
+# orientation: q_sent = q_offset * q_zed,  q_offset = (w=√2/2, z=√2/2)
 ```
 
-**MAVROS with ArduPilot (`apm.launch`) does NOT auto-convert ENU→NED.** The bridge must publish NED directly.
+See `.claude/rules/yaw_frame_research.md` for the full derivation and MAVROS source references.
 
 ### Critical: QoS
 
 ZED publishes odom with **BEST_EFFORT** reliability. The bridge subscription must match — ROS2 silently drops mismatched QoS connections.
 
-### Critical: mocap plugin for correct yaw
-
-The `vision_pose` MAVROS plugin extracts yaw via Eigen's `eulerAngles()` which returns values only in [0, π] — yaw over 180° folds back toward 0 instead of wrapping to -π. This breaks heading for any Western heading.
-
-`config/apm_pluginlists_vision.yaml` uses `mocap_pose_estimate` instead, which sends `ATT_POS_MOCAP` (full quaternion, no Euler extraction) to ArduPilot. Same `AP_ExternalNav_MAV` backend — same EKF3 source params apply.
-
-Bridge publishes to `/mavros/mocap/pose` (configurable via `mavros_vision_pose_topic` param).
-
 ### EKF home watchdog
 
-The bridge monitors `/mavros/estimator_status.pos_horiz_rel`. Once it stays `True` for 5 s, it calls `set_home`. Keep the drone **stationary for ~20 s** after launch.
+The bridge monitors `/mavros/estimator_status.pos_horiz_rel`. Once `True` for 5 continuous seconds, calls `set_home`. Keep the drone **stationary for ~20 s** after launch.
 
 ### FastDDS shared-memory
 
-After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topics to appear active but carry no data. `config/fastdds_no_shm.xml` disables SHM transport — the production launch files (`zed_mavros_fc.launch.py`, `mavros_fc.launch.py`) set this automatically. `zed_mavros_sitl.launch.py` does **not** — clear manually with `rm -f /dev/shm/fastrtps_*` or use `mavros_fc.launch.py fcu_url:=tcp://127.0.0.1:5760` for SITL.
+After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topics to appear active but carry no data. `config/fastdds_no_shm.xml` disables SHM transport — `zed_mavros_fc.launch.py` and `mavros_fc.launch.py` set this automatically. `zed_mavros_sitl.launch.py` does **not** — clear manually with `rm -f /dev/shm/fastrtps_*` or use `mavros_fc.launch.py fcu_url:=tcp://127.0.0.1:5760` for SITL.
 
 ### Bridge exclusivity
 
-`indoor_2026` also has a `ZedMavrosBridge`. **Never run both simultaneously** — duplicate messages corrupt the EKF. Verify: `ros2 node list | grep zed_mavros_bridge` must show exactly one.
+`sky_vision2` is the only package that should run `zed_mavros_bridge`. **Never run two instances simultaneously** — duplicate messages on `/mavros/vision_pose/pose` corrupt the EKF. Verify: `ros2 node list | grep zed_mavros_bridge` must show exactly one.
 
 ## Launch arguments
 
@@ -110,6 +100,7 @@ After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topi
 
 ## See also
 
-- `.claude/rules/bridge_node.md` — full topic/parameter reference and EKF watchdog details
+- `.claude/rules/bridge_node.md` — full topic/parameter reference, NED alignment offset, EKF watchdog
+- `.claude/rules/yaw_frame_research.md` — full ZED→MAVROS→ArduPilot frame chain, ±π safety, EKF3 fusion
 - `.claude/rules/launch_and_config.md` — launch variants, FastDDS, config files
 - `~/sky_ws2/CLAUDE.md` — workspace context (build, SITL workflow, submodule management)
