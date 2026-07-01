@@ -73,16 +73,16 @@ class ZedMavrosBridge(Node):
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
 
-        # Step 1 — NED frame correction
-        # ZED right-side-up: X=North, Y=West, Z=Down → NED: X=North, Y=East, Z=Down
-        # Negate Y position and velocity; negate qy, qz in quaternion.
-        qx =  msg.pose.pose.orientation.x
-        qy = -msg.pose.pose.orientation.y
-        qz = -msg.pose.pose.orientation.z
-        qw =  msg.pose.pose.orientation.w
+        # ZED observed axes: X=East, Y=North, Z=Down
+        # NED target:        X=North, Y=East, Z=Down
+        # Position/velocity: swap X and Y (no negation needed)
+        # Quaternion: pass through, then apply yaw offset only
+        qx = msg.pose.pose.orientation.x
+        qy = msg.pose.pose.orientation.y
+        qz = msg.pose.pose.orientation.z
+        qw = msg.pose.pose.orientation.w
 
-        # Step 2 — apply yaw offset: q_out = q_corr * q_ned
-        # q_corr = (0, 0, _corr_z, _corr_w); full multiply simplifies to:
+        # apply yaw offset: q_out = q_corr * q_in
         cz, cw = self._corr_z, self._corr_w
         ox = cw * qx - cz * qy
         oy = cw * qy + cz * qx
@@ -92,9 +92,9 @@ class ZedMavrosBridge(Node):
         pose_msg = PoseStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = 'map'
-        pose_msg.pose.position.x =  msg.pose.pose.position.x
-        pose_msg.pose.position.y = -msg.pose.pose.position.y
-        pose_msg.pose.position.z =  msg.pose.pose.position.z
+        pose_msg.pose.position.x = -msg.pose.pose.position.y   # North
+        pose_msg.pose.position.y =  msg.pose.pose.position.x   # East
+        pose_msg.pose.position.z = msg.pose.pose.position.z
         pose_msg.pose.orientation.x = ox
         pose_msg.pose.orientation.y = oy
         pose_msg.pose.orientation.z = oz
@@ -104,9 +104,9 @@ class ZedMavrosBridge(Node):
         speed_msg = TwistStamped()
         speed_msg.header.stamp    = stamp
         speed_msg.header.frame_id = 'map'
-        speed_msg.twist.linear.x  =  msg.twist.twist.linear.x
-        speed_msg.twist.linear.y  = -msg.twist.twist.linear.y
-        speed_msg.twist.linear.z  =  msg.twist.twist.linear.z
+        speed_msg.twist.linear.x  = -msg.twist.twist.linear.y   # North
+        speed_msg.twist.linear.y  =  msg.twist.twist.linear.x   # East
+        speed_msg.twist.linear.z  = msg.twist.twist.linear.z
         self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1
