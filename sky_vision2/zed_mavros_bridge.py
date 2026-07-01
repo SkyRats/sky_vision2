@@ -1,33 +1,17 @@
 """
-ZED camera odometry to MAVROS bridge with automatic home setting.
+ZED camera odometry to MAVROS bridge.
 
-ZED outputs in its own frame. ArduPilot expects NED (North-East-Down).
-MAVROS vision_pose plugin expects ENU (East-North-Up) and converts to NED.
+ZED odom frame (observed on hardware, camera right-side up): X=North, Y=West, Z=Down.
+Correction to NED (X=North, Y=East, Z=Down):
+  - Negate Y: West → East
+  - Z is already Down — unchanged
+  - Quaternion: negate qy and qz (flipping Y reverses rotations around Y and Z)
 
-ZED odom follows ROS REP-105 — already ENU (East-North-Up).
-MAVROS vision_pose plugin converts ENU → NED for ArduPilot automatically.
+After NED correction an optional yaw_offset_rad is applied (quaternion multiply on the
+left by a pure-Z rotation). Use this to zero out the ZED's initial heading:
+  yaw_offset_rad = -(initial yaw reading in radians)
 
-NED alignment offset
---------------------
-ZED always boots with identity orientation (ENU yaw = 0, i.e. the camera's
-physical forward direction is treated as ENU East).  MAVROS then converts
-ENU yaw=0 → NED yaw=π/2 (East), so ArduPilot would see the drone nose
-pointing East instead of North at startup.
-
-To fix this, every ZED pose is left-multiplied by a +π/2-around-Z quaternion
-before being forwarded.  This shifts ENU yaw by +π/2 so MAVROS outputs
-NED yaw=0 — the drone's boot-time nose direction becomes NED North.
-
-    q_offset = (w=√2/2, x=0, y=0, z=√2/2)   [+π/2 around Z]
-    q_sent   = q_offset * q_zed
-    p_sent   = R(+π/2) * p_zed  →  (x,y) → (−y, x)
-
-All subsequent yaw deltas track correctly; only the zero-reference changes.
-
-- Monitors EKF3 health via /mavros/estimator_status
-- Calls /mavros/cmd/set_home once EKF has been healthy for STABLE_SECS
-
-Required ArduPilot parameters:
+ArduPilot parameters required:
     EK3_SRC1_POSXY = 6  (ExternalNav)
     EK3_SRC1_VELXY = 6  (ExternalNav)
     EK3_SRC1_POSZ  = 1  (Baro)
@@ -43,15 +27,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import EstimatorStatus
-from mavros_msgs.srv import CommandHome
-
-
-STABLE_SECS = 5.0
-
-# +π/2 rotation around Z: aligns ZED's initial forward direction with NED North.
-# q_offset = (w=√2/2, x=0, y=0, z=√2/2)
-_HALF_SQRT2 = math.sqrt(2.0) / 2.0
 
 
 class ZedMavrosBridge(Node):
@@ -59,12 +34,19 @@ class ZedMavrosBridge(Node):
         super().__init__('zed_mavros_bridge')
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
-        self.declare_parameter('mavros_vision_pose_topic', '/mavros/vision_pose/pose')
-        self.declare_parameter('mavros_vision_speed_topic', '/mavros/vision_speed/speed_twist')
+        self.declare_parameter('mavros_vision_pose_topic', '/mavros/mavros/pose')
+        self.declare_parameter('mavros_vision_speed_topic', '/mavros/mavros/speed_twist')
+        self.declare_parameter('yaw_offset_rad', 0.0)
 
-        zed_topic   = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
-        pose_topic  = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
-        speed_topic = self.get_parameter('mavros_vision_speed_topic').get_parameter_value().string_value
+        zed_topic    = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
+        pose_topic   = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
+        speed_topic  = self.get_parameter('mavros_vision_speed_topic').get_parameter_value().string_value
+        yaw_offset   = self.get_parameter('yaw_offset_rad').get_parameter_value().double_value
+
+        # Pre-compute yaw-offset correction quaternion (pure Z rotation)
+        # q_corr = (0, 0, sin(offset/2), cos(offset/2))
+        self._corr_z = math.sin(yaw_offset / 2.0)
+        self._corr_w = math.cos(yaw_offset / 2.0)
 
         sensor_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -73,121 +55,68 @@ class ZedMavrosBridge(Node):
             depth=10,
         )
 
-        self._sub = self.create_subscription(Odometry, zed_topic, self._odom_cb, sensor_qos)
-        self._ekf_sub = self.create_subscription(
-            EstimatorStatus, '/mavros/estimator_status', self._ekf_cb, 10
-        )
-
+        self._sub       = self.create_subscription(Odometry, zed_topic, self._odom_cb, sensor_qos)
         self._pose_pub  = self.create_publisher(PoseStamped, pose_topic, 10)
         self._speed_pub = self.create_publisher(TwistStamped, speed_topic, 10)
-        self._home_client = self.create_client(CommandHome, '/mavros/cmd/set_home')
 
-        self._msg_count     = 0
-        self._healthy_since = None
-        self._home_set      = False
+        self._msg_count = 0
 
         self.get_logger().info(
             f'ZED-MAVROS bridge started\n'
             f'  ZED odom     : {zed_topic}\n'
             f'  Vision pose  : {pose_topic}\n'
             f'  Vision speed : {speed_topic}\n'
-            f'  Frame: ZED ENU + NED-align offset (+π/2 Z) -> MAVROS NED\n'
-            f'  Boot-time nose direction = NED North (yaw=0)\n'
-            f'  Home set after {STABLE_SECS}s of healthy EKF'
+            f'  Yaw offset   : {math.degrees(yaw_offset):.1f} deg\n'
+            f'  Frame: ZED right-side-up (X=N,Y=W,Z=D) -> NED (negate Y; flip qy,qz)'
         )
-
-    def _apply_ned_align(self, pose):
-        """Left-multiply pose by q_offset(+π/2 around Z) so boot-time nose = NED North.
-
-        Position:    (x, y, z) → (−y, x, z)      [R(+π/2) around Z]
-        Orientation: q_new = q_offset * q_zed
-                     q_offset = (w=√2/2, x=0, y=0, z=√2/2)
-
-        Derivation:
-          ZED boot → ENU yaw=0 → MAVROS → NED yaw=π/2 (East, not North).
-          Adding +π/2 to ENU yaw → NED yaw=0 (North). Done by left-multiplying
-          with q_offset, which is equivalent to rotating the world frame +π/2
-          around Z before MAVROS applies its own ENU→NED transform.
-        """
-        x, y = pose.position.x, pose.position.y
-        pose.position.x = -y
-        pose.position.y =  x
-
-        s = _HALF_SQRT2
-        w, qx, qy, qz = (pose.orientation.w, pose.orientation.x,
-                          pose.orientation.y, pose.orientation.z)
-        pose.orientation.w = s * (w  - qz)
-        pose.orientation.x = s * (qx - qy)
-        pose.orientation.y = s * (qx + qy)
-        pose.orientation.z = s * (w  + qz)
 
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
+
+        # Step 1 — NED frame correction
+        # ZED right-side-up: X=North, Y=West, Z=Down → NED: X=North, Y=East, Z=Down
+        # Negate Y position and velocity; negate qy, qz in quaternion.
+        qx =  msg.pose.pose.orientation.x
+        qy = -msg.pose.pose.orientation.y
+        qz = -msg.pose.pose.orientation.z
+        qw =  msg.pose.pose.orientation.w
+
+        # Step 2 — apply yaw offset: q_out = q_corr * q_ned
+        # q_corr = (0, 0, _corr_z, _corr_w); full multiply simplifies to:
+        cz, cw = self._corr_z, self._corr_w
+        ox = cw * qx - cz * qy
+        oy = cw * qy + cz * qx
+        oz = cw * qz + cz * qw
+        ow = cw * qw - cz * qz
+
         pose_msg = PoseStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = 'map'
-        pose_msg.pose            = msg.pose.pose
-        self._apply_ned_align(pose_msg.pose)
+        pose_msg.pose.position.x =  msg.pose.pose.position.x
+        pose_msg.pose.position.y = -msg.pose.pose.position.y
+        pose_msg.pose.position.z =  msg.pose.pose.position.z
+        pose_msg.pose.orientation.x = ox
+        pose_msg.pose.orientation.y = oy
+        pose_msg.pose.orientation.z = oz
+        pose_msg.pose.orientation.w = ow
         self._pose_pub.publish(pose_msg)
 
         speed_msg = TwistStamped()
         speed_msg.header.stamp    = stamp
         speed_msg.header.frame_id = 'map'
-        speed_msg.twist           = msg.twist.twist
+        speed_msg.twist.linear.x  =  msg.twist.twist.linear.x
+        speed_msg.twist.linear.y  = -msg.twist.twist.linear.y
+        speed_msg.twist.linear.z  =  msg.twist.twist.linear.z
         self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1
-        if self._msg_count % 100 == 0:
+        if self._msg_count == 150:
+            self.get_logger().info('Vision data flowing — ready to arm once EKF converges')
+        if self._msg_count % 300 == 0:
             p = msg.pose.pose.position
-            q = msg.pose.pose.orientation
             self.get_logger().info(
-                f'[{self._msg_count}] ZED -> MAVROS | '
-                f'pos=({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) '
-                f'quat=({q.x:.3f}, {q.y:.3f}, {q.z:.3f}, {q.w:.3f})'
+                f'[{self._msg_count}] pos=({p.x:.3f}, {-p.y:.3f}, {p.z:.3f})'
             )
-
-    def _ekf_cb(self, msg: EstimatorStatus):
-        if self._home_set:
-            return
-
-        now = self.get_clock().now()
-
-        if msg.pos_horiz_rel:
-            if self._healthy_since is None:
-                self._healthy_since = now
-                self.get_logger().info('EKF healthy — starting home countdown')
-
-            elapsed = (now - self._healthy_since).nanoseconds / 1e9
-            if elapsed >= STABLE_SECS:
-                self._send_set_home()
-        else:
-            if self._healthy_since is not None:
-                self.get_logger().info('EKF lost — resetting countdown')
-            self._healthy_since = None
-
-    def _send_set_home(self):
-        if not self._home_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('set_home service not available, retrying')
-            self._healthy_since = None
-            return
-
-        req = CommandHome.Request()
-        req.current_gps = True
-        future = self._home_client.call_async(req)
-        future.add_done_callback(self._home_cb)
-
-    def _home_cb(self, future):
-        try:
-            result = future.result()
-            if result.success:
-                self._home_set = True
-                self.get_logger().info('HOME SET from vision EKF — ready to arm')
-            else:
-                self.get_logger().warning(f'set_home failed (result={result.result}), retrying')
-                self._healthy_since = None
-        except Exception as e:
-            self.get_logger().error(f'set_home error: {e}')
-            self._healthy_since = None
 
 
 def main(args=None):
