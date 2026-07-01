@@ -11,4 +11,3 @@
       - home_position
       - imu
       - vision_pose
-      - vision_speed

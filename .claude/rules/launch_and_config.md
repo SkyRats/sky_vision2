@@ -36,17 +36,16 @@ rm -f /dev/shm/fastrtps_*
 ros2 launch sky_vision2 zed_mavros_sitl.launch.py fcu_url:=tcp://127.0.0.1:5760
 ```
 
-## MAVROS plugin allowlist (`config/apm_pluginlists_vision.yaml`)
-
-Only essential plugins are loaded to reduce overhead:
+## MAVROS plugin allowlist (`config/apm_pluginlists_vision.yaml`, verified 2026-07-01)
 
 ```
 sys_status, sys_time, command, local_position, global_position,
-home_position, imu, mocap_pose_estimate, vision_speed
+home_position, imu, vision_pose
 ```
 
-`mocap_pose_estimate` consumes `/mavros/mocap/pose` → `ATT_POS_MOCAP` MAVLink message (full quaternion, avoids Eigen yaw-folding bug in `vision_pose`).
-`vision_speed` consumes `/mavros/vision_speed/speed_twist` → `VISION_SPEED_ESTIMATE` MAVLink message.
+`vision_pose` consumes the bridge's pose topic (default `/mavros/mavros/pose` — see `.claude/rules/bridge_node.md` for why) → `VISION_POSITION_ESTIMATE` MAVLink message.
+
+`vision_speed` was removed from the allowlist 2026-07-01 — the bridge no longer publishes vision_speed at all (ZED wrapper never populates `Odometry.twist`, so it would only ever be a false zero-velocity measurement). `mocap_pose_estimate` was never actually used by this package's real config despite older docs suggesting otherwise — this repo consistently uses plain `vision_pose`.
 
 ## Required ArduPilot FCU parameters
 
@@ -55,7 +54,7 @@ Set these on the Pixhawk before any flight that uses visual odometry:
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
 | `EK3_SRC1_POSXY` | `6` | ExternalNav horizontal position |
-| `EK3_SRC1_VELXY` | `6` | ExternalNav horizontal velocity |
+| `EK3_SRC1_VELXY` | `0` | None — no vision_speed is published |
 | `EK3_SRC1_POSZ` | `1` | Barometer vertical position |
 | `EK3_SRC1_VELZ` | `0` | No vertical velocity source |
 | `EK3_SRC1_YAW` | `6` | ExternalNav yaw |
@@ -70,9 +69,8 @@ After launching, in a new terminal with `export ROS_DOMAIN_ID=42`:
 ```bash
 ros2 topic echo /mavros/state --once          # connected: True
 ros2 topic hz /zed/zed_node/odom             # ~30 Hz (after ~15 s warm-up)
-ros2 topic hz /mavros/vision_pose/pose       # ~30 Hz
-ros2 topic hz /mavros/vision_speed/speed_twist  # ~30 Hz
-# Bridge log must show: "HOME SET from vision EKF — ready to arm"
+ros2 topic hz /mavros/mavros/pose            # ~30 Hz
+# Bridge log must show: "Vision data flowing — ready to arm once EKF converges"
 ```
 
 ## Workspace

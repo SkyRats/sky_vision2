@@ -2,8 +2,9 @@
 Test node for the ZED-MAVROS odometry bridge.
 
 Publishes synthetic ZED odometry so the bridge can be exercised without
-real hardware. Verifies that pose and velocity messages arrive on the
-expected MAVROS topics.
+real hardware. Verifies that pose messages arrive on the bridge's actual
+output topic (no vision_speed — the bridge doesn't publish it; see
+zed_mavros_bridge.py's module docstring).
 
 Usage (3 terminals):
     # Terminal 1 — run MAVROS (or just check topics without it):
@@ -13,8 +14,7 @@ Usage (3 terminals):
     ros2 run sky_vision2 test_zed_odom
 
     # Terminal 3 — verify output:
-    ros2 topic echo /mavros/vision_pose/pose
-    ros2 topic echo /mavros/vision_speed/speed_twist
+    ros2 topic echo /mavros/mavros/pose
 """
 
 import math
@@ -23,7 +23,6 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import (
     PoseStamped,
-    TwistStamped,
     Point,
     Quaternion,
     Vector3,
@@ -84,22 +83,18 @@ class ZedOdomPublisher(Node):
 
 
 class BridgeVerifier(Node):
-    """Subscribes to MAVROS topics and logs what arrives."""
+    """Subscribes to the bridge's actual output topic and logs what arrives."""
 
     def __init__(self):
         super().__init__('zed_bridge_verifier')
 
         self._pose_count = 0
-        self._vel_count = 0
 
         self._pose_sub = self.create_subscription(
-            PoseStamped, '/mavros/vision_pose/pose', self._pose_cb, 10
-        )
-        self._vel_sub = self.create_subscription(
-            TwistStamped, '/mavros/vision_speed/speed_twist', self._vel_cb, 10
+            PoseStamped, '/mavros/mavros/pose', self._pose_cb, 10
         )
         self._check_timer = self.create_timer(5.0, self._report)
-        self.get_logger().info('Verifier listening on /mavros/vision_pose/pose and /mavros/vision_speed/speed_twist')
+        self.get_logger().info('Verifier listening on /mavros/mavros/pose')
 
     def _pose_cb(self, msg: PoseStamped):
         self._pose_count += 1
@@ -110,18 +105,13 @@ class BridgeVerifier(Node):
                 f'x={p.x:.3f} y={p.y:.3f} z={p.z:.3f}'
             )
 
-    def _vel_cb(self, msg: TwistStamped):
-        self._vel_count += 1
-
     def _report(self):
         if self._pose_count == 0:
             self.get_logger().warning(
-                'No vision_pose messages received yet — is zed_mavros_bridge running?'
+                'No pose messages received yet — is zed_mavros_bridge running?'
             )
         else:
-            self.get_logger().info(
-                f'5s summary: pose_msgs={self._pose_count} vel_msgs={self._vel_count}'
-            )
+            self.get_logger().info(f'5s summary: pose_msgs={self._pose_count}')
 
 
 def main(args=None):

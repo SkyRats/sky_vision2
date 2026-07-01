@@ -1,19 +1,19 @@
 """
 ZED camera odometry to MAVROS bridge.
 
-ZED odom frame (observed on hardware, camera right-side up): X=North, Y=West, Z=Down.
-Correction to NED (X=North, Y=East, Z=Down):
-  - Negate Y: West → East
-  - Z is already Down — unchanged
-  - Quaternion: negate qy and qz (flipping Y reverses rotations around Y and Z)
+Position/orientation only — no vision_speed is published. The ZED ROS2 wrapper's
+publishOdom() never fills the Odometry message's twist field, so msg.twist.twist.linear
+is always exactly zero regardless of actual motion. Forwarding that as
+VISION_SPEED_ESTIMATE would feed the EKF a false "velocity = 0" measurement instead of
+just omitting velocity, which is worse than not sending it at all.
 
-After NED correction an optional yaw_offset_rad is applied (quaternion multiply on the
+An optional yaw_offset_rad is applied to the orientation (quaternion multiply on the
 left by a pure-Z rotation). Use this to zero out the ZED's initial heading:
   yaw_offset_rad = -(initial yaw reading in radians)
 
 ArduPilot parameters required:
     EK3_SRC1_POSXY = 6  (ExternalNav)
-    EK3_SRC1_VELXY = 6  (ExternalNav)
+    EK3_SRC1_VELXY = 0  (None — no external velocity source is published)
     EK3_SRC1_POSZ  = 1  (Baro)
     EK3_SRC1_VELZ  = 0  (None)
     EK3_SRC1_YAW   = 6  (ExternalNav)
@@ -26,7 +26,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped
 
 
 class ZedMavrosBridge(Node):
@@ -35,12 +35,10 @@ class ZedMavrosBridge(Node):
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
         self.declare_parameter('mavros_vision_pose_topic', '/mavros/mavros/pose')
-        self.declare_parameter('mavros_vision_speed_topic', '/mavros/mavros/speed_twist')
         self.declare_parameter('yaw_offset_rad', 0.0)
 
         zed_topic    = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
         pose_topic   = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
-        speed_topic  = self.get_parameter('mavros_vision_speed_topic').get_parameter_value().string_value
         yaw_offset   = self.get_parameter('yaw_offset_rad').get_parameter_value().double_value
 
         # Pre-compute yaw-offset correction quaternion (pure Z rotation)
@@ -57,7 +55,6 @@ class ZedMavrosBridge(Node):
 
         self._sub       = self.create_subscription(Odometry, zed_topic, self._odom_cb, sensor_qos)
         self._pose_pub  = self.create_publisher(PoseStamped, pose_topic, 10)
-        self._speed_pub = self.create_publisher(TwistStamped, speed_topic, 10)
 
         self._msg_count = 0
 
@@ -65,9 +62,8 @@ class ZedMavrosBridge(Node):
             f'ZED-MAVROS bridge started\n'
             f'  ZED odom     : {zed_topic}\n'
             f'  Vision pose  : {pose_topic}\n'
-            f'  Vision speed : {speed_topic}\n'
             f'  Yaw offset   : {math.degrees(yaw_offset):.1f} deg\n'
-            f'  Frame: ZED right-side-up (X=N,Y=W,Z=D) -> NED (negate Y; flip qy,qz)'
+            f'  (no vision_speed — ZED wrapper never populates twist)'
         )
 
     def _odom_cb(self, msg: Odometry):
@@ -100,14 +96,6 @@ class ZedMavrosBridge(Node):
         pose_msg.pose.orientation.z = oz
         pose_msg.pose.orientation.w = ow
         self._pose_pub.publish(pose_msg)
-
-        speed_msg = TwistStamped()
-        speed_msg.header.stamp    = stamp
-        speed_msg.header.frame_id = 'map'
-        speed_msg.twist.linear.x  = -msg.twist.twist.linear.y   # North
-        speed_msg.twist.linear.y  =  msg.twist.twist.linear.x   # East
-        speed_msg.twist.linear.z  = msg.twist.twist.linear.z
-        self._speed_pub.publish(speed_msg)
 
         self._msg_count += 1
         if self._msg_count == 150:

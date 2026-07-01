@@ -61,7 +61,9 @@ The bridge does its own axis remap in `_odom_cb` — it does **not** rely on MAV
 
 `yaw_offset_rad` is a launch parameter (default `-1.5708`, i.e. −90°, set in `zed_mavros_fc.launch.py`) used to zero out the ZED's initial heading at boot.
 
-**Known inconsistency (unresolved, not yet fixed in code):** the module docstring and the node's own startup log message in `zed_mavros_bridge.py` describe a *different* transform ("negate Y; flip qy,qz") than what `_odom_cb` actually executes (swap+negate X/Y, quaternion passthrough). Don't trust the in-file docstring/log text over the actual `_odom_cb` body — verify against source if behavior seems off.
+Confirmed correct in a live hardware run (EKF3 yaw-aligned, using external nav data). The module docstring/startup log previously described a different transform ("negate Y; flip qy,qz") than `_odom_cb` actually executed — fixed 2026-07-01, so they now agree.
+
+**No vision_speed:** the ZED wrapper's `publishOdom()` never fills the Odometry message's `twist` field, so velocity is always exactly zero regardless of real motion. The bridge does not publish vision_speed at all (removed 2026-07-01) rather than forward a false zero-velocity measurement — `EK3_SRC1_VELXY` must be `0` (None), not `6`, on the FC. See `docs/zed_mavros_bridge.md` at the workspace root for the full writeup.
 
 `.claude/rules/yaw_frame_research.md` describes an **older/superseded architecture** (MAVROS auto ENU→NED via `vision_pose_estimate`, +π/2 quaternion offset) that no longer matches this file — kept for historical background only.
 
@@ -69,9 +71,9 @@ The bridge does its own axis remap in `_odom_cb` — it does **not** rely on MAV
 
 ZED publishes odom with **BEST_EFFORT** reliability. The bridge subscription must match — ROS2 silently drops mismatched QoS connections.
 
-### EKF home watchdog
+### No EKF watchdog / auto-home
 
-The bridge monitors `/mavros/estimator_status.pos_horiz_rel`. Once `True` for 5 continuous seconds, calls `set_home`. Keep the drone **stationary for ~20 s** after launch.
+The bridge has no `estimator_status` subscription and no `set_home` service client — both were removed (see `.claude/rules/bridge_node.md`). ArduPilot sets the EKF origin automatically once vision data starts arriving. Keep the drone **stationary for ~20 s** after launch so the EKF converges cleanly.
 
 ### FastDDS shared-memory
 
@@ -95,7 +97,7 @@ After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topi
 | Parameter | Value |
 |-----------|-------|
 | `EK3_SRC1_POSXY` | `6` (ExternalNav) |
-| `EK3_SRC1_VELXY` | `6` (ExternalNav) |
+| `EK3_SRC1_VELXY` | `0` (None — no vision_speed is published) |
 | `EK3_SRC1_POSZ` | `1` (Baro) |
 | `EK3_SRC1_VELZ` | `0` (None) |
 | `EK3_SRC1_YAW` | `6` (ExternalNav) |
