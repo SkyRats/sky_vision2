@@ -1,5 +1,7 @@
 # Yaw and Frame Convention — ZED → MAVROS → ArduPilot EKF3
 
+> **Superseded, 2026-07-01:** this doc describes an older bridge design (MAVROS auto ENU→NED via the `vision_pose_estimate` plugin, +π/2 quaternion offset). The bridge running today (`zed_mavros_bridge.py`) does its own axis remap in `_odom_cb` and does not depend on this conversion path — see `.claude/rules/bridge_node.md` for the current, verified behavior. Keeping this file for the MAVROS/ArduPilot source-level background research (Eigen yaw clamping, EKF3 fusion chain), which is still generally useful, but don't treat the "NED alignment offset" section below as current.
+
 ## Full pipeline at a glance
 
 ```

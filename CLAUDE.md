@@ -30,7 +30,7 @@ ros2 run sky_vision2 zed_mavros_bridge   # terminal 1
 ros2 run sky_vision2 test_zed_odom       # terminal 2
 ```
 
-Wait for: `HOME SET from vision EKF — ready to arm` before arming.
+Wait for: `Vision data flowing — ready to arm once EKF converges` (bridge log), then confirm `FCU: EKF3 IMU0 is using external nav data` in the MAVROS log before arming. There is no explicit `set_home` call — ArduPilot sets the EKF origin automatically once vision data arrives.
 
 ## Tests
 
@@ -50,18 +50,20 @@ colcon test-result --verbose
 | `zed_mavros_bridge` | `sky_vision2/zed_mavros_bridge.py` | Production bridge — runs during every flight |
 | `test_zed_odom` | `sky_vision2/test_zed_odom.py` | Synthetic circular odom at 30 Hz for offline testing |
 
-### Frame convention
+### Frame convention (verified against running code, 2026-07-01)
 
-ZED odom follows ROS REP-105 (ENU). MAVROS `vision_pose_estimate` plugin converts ENU→NED automatically before sending `VISION_POSITION_ESTIMATE` to ArduPilot. **The bridge does not manually convert frames.**
-
-The bridge applies a single NED alignment offset (+π/2 around Z) so ArduPilot sees NED yaw=0 (boot-time nose = NED North) instead of yaw=π/2 (East):
+The bridge does its own axis remap in `_odom_cb` — it does **not** rely on MAVROS's ENU→NED auto-conversion:
 
 ```python
-# position: (x, y, z) → (−y, x, z)
-# orientation: q_sent = q_offset * q_zed,  q_offset = (w=√2/2, z=√2/2)
+# position: x_ned = -y_zed, y_ned = x_zed, z_ned = z_zed
+# orientation: passed through unchanged, then rotated by yaw_offset_rad (pure Z quaternion, left-multiply)
 ```
 
-See `.claude/rules/yaw_frame_research.md` for the full derivation and MAVROS source references.
+`yaw_offset_rad` is a launch parameter (default `-1.5708`, i.e. −90°, set in `zed_mavros_fc.launch.py`) used to zero out the ZED's initial heading at boot.
+
+**Known inconsistency (unresolved, not yet fixed in code):** the module docstring and the node's own startup log message in `zed_mavros_bridge.py` describe a *different* transform ("negate Y; flip qy,qz") than what `_odom_cb` actually executes (swap+negate X/Y, quaternion passthrough). Don't trust the in-file docstring/log text over the actual `_odom_cb` body — verify against source if behavior seems off.
+
+`.claude/rules/yaw_frame_research.md` describes an **older/superseded architecture** (MAVROS auto ENU→NED via `vision_pose_estimate`, +π/2 quaternion offset) that no longer matches this file — kept for historical background only.
 
 ### Critical: QoS
 
@@ -86,6 +88,7 @@ After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topi
 | `fcu_url` | `/dev/ttyTHS1:921600` | Jetson Telem2 UART; use `tcp://127.0.0.1:5760` for SITL |
 | `camera_model` | `zed2i` | ZED model string |
 | `zed_odom_topic` | `/zed/zed_node/odom` | ZED odom topic |
+| `yaw_offset_rad` | `-1.5708` (−90°) | Zeroes ZED's initial heading — see Frame convention below |
 
 ## Required ArduPilot FCU parameters
 

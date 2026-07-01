@@ -11,50 +11,50 @@
 | Direction | Topic | Type | QoS |
 |-----------|-------|------|-----|
 | Subscribes | `zed_odom_topic` param (default `/zed/zed_node/odom`) | `nav_msgs/Odometry` | **BEST_EFFORT**, VOLATILE, depth=10 |
-| Subscribes | `/mavros/estimator_status` | `mavros_msgs/EstimatorStatus` | RELIABLE (default) |
-| Publishes | `mavros_vision_pose_topic` param (default `/mavros/vision_pose/pose`) | `geometry_msgs/PoseStamped` | RELIABLE (default) |
-| Publishes | `mavros_vision_speed_topic` param (default `/mavros/vision_speed/speed_twist`) | `geometry_msgs/TwistStamped` | RELIABLE (default) |
-| Service client | `/mavros/cmd/set_home` | `mavros_msgs/srv/CommandHome` | async |
+| Publishes | `mavros_vision_pose_topic` param (default `/mavros/mavros/pose`) | `geometry_msgs/PoseStamped` | default (RELIABLE) |
+| Publishes | `mavros_vision_speed_topic` param (default `/mavros/mavros/speed_twist`) | `geometry_msgs/TwistStamped` | default (RELIABLE) |
 
 **Critical:** ZED driver publishes odom with BEST_EFFORT. The bridge subscription must use BEST_EFFORT — using RELIABLE silently receives nothing.
+
+**No `/mavros/estimator_status` subscription and no `set_home` service client exist in the current code** (verified against `sky_vision2/zed_mavros_bridge.py` 2026-07-01). These were removed — see reasons below under "No EKF watchdog / auto-home".
+
+### Why the default topic is `/mavros/mavros/pose`, not `/mavros/vision_pose/pose`
+
+The MAVROS `vision_pose` plugin subscribes to a **relative** topic (`~pose`). Since the `mavros_node` in this launch file runs with `name='mavros'` (no explicit `namespace:=` override), its effective node namespace is `/mavros/mavros`, so the plugin's relative subscription resolves to `/mavros/mavros/pose` — not the `/mavros/vision_pose/pose` shown in generic MAVROS documentation/examples. Same reasoning applies to `mavros_vision_speed_topic` → `/mavros/mavros/speed_twist`.
+
+Verify with `ros2 node info /mavros/mavros` if this ever needs re-checking (e.g. after a MAVROS/launch-file version bump).
 
 ## Parameters
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `zed_odom_topic` | `/zed/zed_node/odom` | Change if using a non-standard ZED namespace |
-| `mavros_vision_pose_topic` | `/mavros/vision_pose/pose` | Feeds EKF3 position |
-| `mavros_vision_speed_topic` | `/mavros/vision_speed/speed_twist` | Feeds EKF3 velocity |
+| `mavros_vision_pose_topic` | `/mavros/mavros/pose` | Feeds EKF3 position |
+| `mavros_vision_speed_topic` | `/mavros/mavros/speed_twist` | Feeds EKF3 velocity |
+| `yaw_offset_rad` | `0.0` (source default) — launch file sets `-1.5708` | Zeroes ZED's initial heading; applied as a pure-Z quaternion left-multiply after the axis remap |
 
-## Frame convention
+## Frame convention (verified against running code, 2026-07-01)
 
-ZED odom follows ROS REP-105 (ENU). MAVROS `vision_pose_estimate` plugin converts ENU→NED automatically before sending `VISION_POSITION_ESTIMATE` to ArduPilot. **The bridge does not perform any manual frame correction.**
-
-### NED alignment offset
-
-ZED boots with identity orientation (ENU yaw=0). MAVROS converts this to NED yaw=π/2, meaning ArduPilot would see the drone nose pointing East at startup. The bridge fixes this by left-multiplying every pose by a +π/2-around-Z quaternion before publishing:
+`_odom_cb` performs its own axis remap — it does **not** rely on MAVROS auto-converting ENU→NED:
 
 ```python
-q_offset = (w=√2/2, x=0, y=0, z=√2/2)   # +π/2 around Z
-q_sent   = q_offset * q_zed
-# Position: (x, y, z) → (−y, x, z)
+# position: x_ned = -y_zed, y_ned = x_zed, z_ned = z_zed
+# orientation: qx,qy,qz,qw passed through unchanged, then rotated by yaw_offset_rad
+#              (q_out = q_corr * q_in, q_corr = pure Z rotation of yaw_offset_rad)
 ```
 
-Result: boot-time nose direction = NED North (yaw=0). All yaw deltas track correctly.
+**Known inconsistency, not yet fixed:** the module docstring at the top of `zed_mavros_bridge.py`, and the node's own startup log line ("Frame: ZED right-side-up (X=N,Y=W,Z=D) -> NED (negate Y; flip qy,qz)"), describe a *different* transform than what `_odom_cb` actually does. The docstring/log claim "negate Y, flip qy/qz"; the real code does "swap+negate X/Y, quaternion passthrough + yaw offset". Trust the `_odom_cb` body, not the docstring or log text, when reasoning about behavior. Confirmed operationally correct in a live hardware run (EKF3 aligned yaw, used external nav data, position held near zero while stationary) — so functionally fine, just an internal documentation drift worth cleaning up in a future code change.
 
-See `.claude/rules/yaw_frame_research.md` for the full derivation, MAVROS source references, the ±π Eigen clamping behavior, and ArduPilot's EKF3 fusion chain.
+`.claude/rules/yaw_frame_research.md` describes an **older/superseded architecture** (MAVROS auto ENU→NED via `vision_pose_estimate` plugin's built-in conversion, +π/2 quaternion offset applied by the bridge). That no longer matches the current `_odom_cb` implementation — kept for historical background only, not as a behavior reference.
 
-## EKF watchdog and auto-home
+## No EKF watchdog / auto-home
 
-Monitors `/mavros/estimator_status.pos_horiz_rel`. Once `True` for `STABLE_SECS=5.0` continuous seconds → calls `set_home` async.
+Earlier versions of this bridge subscribed to `/mavros/estimator_status` and called `/mavros/cmd/set_home` once EKF health looked good. Both were removed:
 
-Log sequence:
-```
-EKF healthy — starting home countdown
-HOME SET from vision EKF — ready to arm
-```
+- `/mavros/estimator_status` is fed by ArduPilot's `EKF_STATUS_REPORT` MAVLink message, sent at whatever rate `SR2_EXTRA3` specifies — defaults to `0` on Telem2, so the topic never actually publishes new data.
+- `/mavros/cmd/set_home` isn't reliably callable until several seconds after MAVROS connects, and isn't needed anyway — ArduPilot sets the EKF origin automatically once vision data starts arriving.
 
-**Keep drone stationary for first ~20 s after launch** so EKF converges and home is set at the correct position.
+**Keep the drone stationary for the first ~20 s after launch** so the EKF converges cleanly, even though there's no explicit watchdog gating on this anymore.
 
 ## Bridge exclusivity
 
