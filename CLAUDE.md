@@ -30,7 +30,7 @@ ros2 run sky_vision2 zed_mavros_bridge   # terminal 1
 ros2 run sky_vision2 test_zed_odom       # terminal 2
 ```
 
-Wait for: `Vision data flowing — ready to arm once EKF converges` (bridge log), then confirm `FCU: EKF3 IMU0 is using external nav data` in the MAVROS log before arming. There is no explicit `set_home` call — ArduPilot sets the EKF origin automatically once vision data arrives.
+Wait for: `Vision data flowing — ready to arm once EKF converges` (bridge log), then confirm `FCU: EKF3 IMU0 is using external nav data` in the MAVROS log before arming. `ekf_home_watchdog` calls `/mavros/mavros/set_home` automatically once vision has been flowing stably for a few seconds — wait for its `HOME SET from vision EKF — ready to arm` log line too.
 
 ## Tests
 
@@ -48,6 +48,7 @@ colcon test-result --verbose
 | Executable | Source | Role |
 |-----------|--------|------|
 | `zed_mavros_bridge` | `sky_vision2/zed_mavros_bridge.py` | Production bridge — runs during every flight |
+| `ekf_home_watchdog` | `sky_vision2/ekf_home_watchdog.py` | Sets FC home via `/mavros/mavros/set_home` once vision is stable — runs during every flight |
 | `test_zed_odom` | `sky_vision2/test_zed_odom.py` | Synthetic circular odom at 30 Hz for offline testing |
 
 ### Frame convention (verified against running code, 2026-07-01)
@@ -71,9 +72,15 @@ Confirmed correct in a live hardware run (EKF3 yaw-aligned, using external nav d
 
 ZED publishes odom with **BEST_EFFORT** reliability. The bridge subscription must match — ROS2 silently drops mismatched QoS connections.
 
-### No EKF watchdog / auto-home
+### EKF home-setting: Lua (primary) vs ekf_home_watchdog (fallback)
 
-The bridge has no `estimator_status` subscription and no `set_home` service client — both were removed (see `.claude/rules/bridge_node.md`). ArduPilot sets the EKF origin automatically once vision data starts arriving. Keep the drone **stationary for ~20 s** after launch so the EKF converges cleanly.
+**Primary/trusted mechanism:** `indoor_2026/fc_scripts/ekf_set_home.lua`, run onboard the FC. This is what the team actually relies on — the drone flies with it. **Currently not deployed on this specific Pixhawk 6C: it has no SD card, and ArduPilot loads Lua scripts from `APM/scripts/` on the SD card.** Deploy it once an SD card is installed.
+
+**Fallback:** a ROS2 node, `ekf_home_watchdog`, added 2026-07-01 as a stand-in for when no SD card is available. It watches `/mavros/mavros/pose` for vision to start moving and stay stable, then calls `/mavros/mavros/set_home` (`current_gps=True`) once. Verified 2026-07-01: both this service call and the Lua script's `vehicle:set_home_to_current_location()` resolve to the exact same underlying ArduPilot function (`Copter::set_home_to_current_location`, `ArduCopter/commands.cpp`) — so this node is not a weaker substitute for the *set_home call itself*, only for the *gating logic* around it (see next paragraph). See `.claude/rules/ekf_home_watchdog.md`.
+
+`ekf_home_watchdog` can't use `/mavros/estimator_status` (dead — `SR2_EXTRA3=0` on Telem2) or true EKF variance (Lua reads `ahrs:get_variances()` directly in C++; nothing exposes that over MAVLink here), so it substitutes a position-jump check on `/mavros/mavros/pose` — in practice this ends up watching the bridge's own outgoing vision pose rather than an independent FC-side echo, since `local_position` plugin's own outputs aren't streaming on this hardware (`SR2_POSITION` likely `0` on Telem2, same issue class as `SR2_EXTRA3`). This is weaker than Lua's check — it can't detect slow EKF drift, only sudden discontinuities. Keep the drone **stationary for ~20 s** after launch regardless.
+
+**Not independently verified end-to-end on this hardware/session:** a live test 2026-07-01 got `MAV_RESULT_FAILED` calling `set_home` (likely because the EKF origin — a separate concept from home, see `ArduCopter/commands.cpp`'s `set_home()` — was never established in that particular session: no GPS fix, no beacon, and ExternalNav fusion doesn't set origin on its own). The team's real flights work, so origin evidently does get established somehow in practice (GPS fix, a manual GCS "set origin" step, or something not yet identified) — this just wasn't reproduced in that test session. Treat `ekf_home_watchdog` as unverified until confirmed on a real flight.
 
 ### FastDDS shared-memory
 
@@ -105,7 +112,8 @@ After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topi
 
 ## See also
 
-- `.claude/rules/bridge_node.md` — full topic/parameter reference, NED alignment offset, EKF watchdog
+- `.claude/rules/bridge_node.md` — full topic/parameter reference, NED alignment offset
+- `.claude/rules/ekf_home_watchdog.md` — home-setting node: topics, gating logic, parameters
 - `.claude/rules/yaw_frame_research.md` — full ZED→MAVROS→ArduPilot frame chain, ±π safety, EKF3 fusion
 - `.claude/rules/launch_and_config.md` — launch variants, FastDDS, config files
 - `~/sky_ws2/CLAUDE.md` — workspace context (build, SITL workflow, submodule management)
