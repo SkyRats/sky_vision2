@@ -46,12 +46,6 @@ def generate_launch_description():
         default_value='/zed/zed_node/odom',
         description='ZED ROS2 wrapper odometry topic',
     )
-    yaw_offset_arg = DeclareLaunchArgument(
-        'yaw_offset_rad',
-        default_value='-1.5708',
-        description='Yaw offset (rad) applied after NED correction to zero initial heading',
-    )
-
     mavros_node = Node(
         package='mavros',
         executable='mavros_node',
@@ -77,7 +71,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'zed_odom_topic': LaunchConfiguration('zed_odom_topic'),
-            'yaw_offset_rad': LaunchConfiguration('yaw_offset_rad'),
         }],
     )
 
@@ -93,7 +86,6 @@ def generate_launch_description():
         no_shm,
         fcu_url_arg,
         zed_odom_topic_arg,
-        yaw_offset_arg,
         mavros_node,
         bridge_node,
         watchdog_node,

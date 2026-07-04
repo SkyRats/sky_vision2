@@ -7,9 +7,14 @@ is always exactly zero regardless of actual motion. Forwarding that as
 VISION_SPEED_ESTIMATE would feed the EKF a false "velocity = 0" measurement instead of
 just omitting velocity, which is worse than not sending it at all.
 
-An optional yaw_offset_rad is applied to the orientation (quaternion multiply on the
-left by a pure-Z rotation). Use this to zero out the ZED's initial heading:
-  yaw_offset_rad = -(initial yaw reading in radians)
+On the first odom message the bridge auto-zeros the initial NED yaw so ArduPilot
+always sees yaw=0 at boot regardless of drone orientation. The correction is derived
+from the MAVROS ENU→NED transform chain:
+
+  q_ned = Rz(π/2)·Rx(π) * q_bridge * Rx(π)
+
+For a pure-Z ENU input at angle φ the NED yaw comes out as a function of φ.
+Setting the bridge correction offset = π/2 − φ_initial forces that NED yaw to 0.
 
 ArduPilot parameters required:
     EK3_SRC1_POSXY = 6  (ExternalNav)
@@ -35,16 +40,14 @@ class ZedMavrosBridge(Node):
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
         self.declare_parameter('mavros_vision_pose_topic', '/mavros/mavros/pose')
-        self.declare_parameter('yaw_offset_rad', 0.0)
 
-        zed_topic    = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
-        pose_topic   = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
-        yaw_offset   = self.get_parameter('yaw_offset_rad').get_parameter_value().double_value
+        zed_topic  = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
+        pose_topic = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
 
-        # Pre-compute yaw-offset correction quaternion (pure Z rotation)
-        # q_corr = (0, 0, sin(offset/2), cos(offset/2))
-        self._corr_z = math.sin(yaw_offset / 2.0)
-        self._corr_w = math.cos(yaw_offset / 2.0)
+        # Correction quaternion (pure Z); set on first odom message via _auto_zero_yaw().
+        self._corr_z = 0.0
+        self._corr_w = 1.0
+        self._yaw_zeroed = False
 
         sensor_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -60,10 +63,29 @@ class ZedMavrosBridge(Node):
 
         self.get_logger().info(
             f'ZED-MAVROS bridge started\n'
-            f'  ZED odom     : {zed_topic}\n'
-            f'  Vision pose  : {pose_topic}\n'
-            f'  Yaw offset   : {math.degrees(yaw_offset):.1f} deg\n'
+            f'  ZED odom    : {zed_topic}\n'
+            f'  Vision pose : {pose_topic}\n'
+            f'  Yaw offset  : auto-zero on first odom message\n'
             f'  (no vision_speed — ZED wrapper never populates twist)'
+        )
+
+    def _auto_zero_yaw(self, qx, qy, qz, qw):
+        # Extract the ZED's initial ENU yaw (rotation around Z).
+        # Standard atan2 formula — returns full [-pi, pi] range.
+        yaw_zed = math.atan2(2.0 * (qw * qz + qx * qy),
+                             1.0 - 2.0 * (qy * qy + qz * qz))
+        # MAVROS applies Rz(pi/2)*Rx(pi) * q * Rx(pi) when converting ENU→NED.
+        # For a pure-Z ENU input at angle phi the NED yaw = 0 when phi = pi/2.
+        # So set the bridge correction so the effective phi is always pi/2:
+        #   offset = pi/2 - yaw_zed
+        offset = math.pi / 2.0 - yaw_zed
+        self._corr_z = math.sin(offset / 2.0)
+        self._corr_w = math.cos(offset / 2.0)
+        self._yaw_zeroed = True
+        self.get_logger().info(
+            f'Yaw auto-zeroed: ZED ENU yaw={math.degrees(yaw_zed):.1f}° '
+            f'→ correction={math.degrees(offset):.1f}° '
+            f'→ initial NED yaw=0°'
         )
 
     def _odom_cb(self, msg: Odometry):
@@ -78,7 +100,10 @@ class ZedMavrosBridge(Node):
         qz = msg.pose.pose.orientation.z
         qw = msg.pose.pose.orientation.w
 
-        # apply yaw offset: q_out = q_corr * q_in
+        if not self._yaw_zeroed:
+            self._auto_zero_yaw(qx, qy, qz, qw)
+
+        # apply yaw correction: q_out = q_corr * q_in
         cz, cw = self._corr_z, self._corr_w
         ox = cw * qx - cz * qy
         oy = cw * qy + cz * qx

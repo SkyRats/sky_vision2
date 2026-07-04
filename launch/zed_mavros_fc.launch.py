@@ -42,12 +42,6 @@ def generate_launch_description():
         default_value='/zed/zed_node/odom',
         description='ZED ROS2 wrapper odometry topic',
     )
-    yaw_offset_arg = DeclareLaunchArgument(
-        'yaw_offset_rad',
-        default_value='-1.5708',
-        description='Yaw offset (rad) applied to zero initial heading',
-    )
-
     # Use a fixed domain ID to avoid DDS type conflicts with other ROS2 nodes
     # on the same network that may have different mavros_msgs builds.
     domain_id = SetEnvironmentVariable('ROS_DOMAIN_ID', '42')
@@ -91,7 +85,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'zed_odom_topic': LaunchConfiguration('zed_odom_topic'),
-            'yaw_offset_rad': LaunchConfiguration('yaw_offset_rad'),
         }],
     )
 
@@ -115,7 +108,6 @@ def generate_launch_description():
         fcu_url_arg,
         camera_model_arg,
         zed_odom_topic_arg,
-        yaw_offset_arg,
         zed_launch,
         mavros_node,
         bridge_node,
