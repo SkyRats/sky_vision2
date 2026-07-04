@@ -1,6 +1,8 @@
 # Yaw and Frame Convention — ZED → MAVROS → ArduPilot EKF3
 
 > **Superseded, 2026-07-01:** this doc describes an older bridge design (MAVROS auto ENU→NED via the `vision_pose_estimate` plugin, +π/2 quaternion offset). The bridge running today (`zed_mavros_bridge.py`) does its own axis remap in `_odom_cb` and does not depend on this conversion path — see `.claude/rules/bridge_node.md` for the current, verified behavior. Keeping this file for the MAVROS/ArduPilot source-level background research (Eigen yaw clamping, EKF3 fusion chain), which is still generally useful, but don't treat the "NED alignment offset" section below as current.
+>
+> **Fix available, 2026-07-03:** the Eigen `eulerAngles(2,1,0)` yaw-clamping bug described below (see "Can you send −π, 0, +π from ZED?") now has a real fix — `git@github.com:odraudE31/mavros.git`, branch `fix/vision-pose-yaw-clamping`, replaces the Eigen decomposition in `quaternion_to_rpy` with an atan2-based ZYX decomposition. Built as an opt-in overlay in `~/sky_ws2` (apt MAVROS untouched by default) — see `docs/mavros_patched.md` at the workspace root. This means the "south/west yaw folds to π" caveat no longer applies when the overlay is active.
 
 ## Full pipeline at a glance
 
@@ -174,6 +176,7 @@ Without the offset (old behavior):
 - [MAVROS frame_tf.hpp](https://github.com/mavlink/mavros/blob/ros2/mavros/include/mavros/frame_tf.hpp)
 - [MAVROS ftf_frame_conversions.cpp](https://github.com/mavlink/mavros/blob/ros2/mavros/src/lib/ftf_frame_conversions.cpp)
 - [MAVROS issue #444 — eulerAngles [0,π] clamping](https://github.com/mavlink/mavros/issues/444)
+- `git@github.com:odraudE31/mavros.git`, branch `fix/vision-pose-yaw-clamping` (commit `d61db77e`) — atan2-based fix for the above, see `docs/mavros_patched.md`
 - [ArduPilot AP_VisualOdom.cpp](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_VisualOdom/AP_VisualOdom.cpp)
 - [ArduPilot AP_VisualOdom_MAV.cpp](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_VisualOdom/AP_VisualOdom_MAV.cpp)
 - [ArduPilot GCS_Common.cpp](https://github.com/ArduPilot/ardupilot/blob/master/libraries/GCS_MAVLink/GCS_Common.cpp)

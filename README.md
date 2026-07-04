@@ -97,6 +97,14 @@ rm -f /dev/shm/fastrtps_*
 
 Or just use `mavros_fc.launch.py` with `fcu_url:=tcp://127.0.0.1:5760` — it has the fix built in.
 
+## Optional: patched MAVROS (yaw-clamping fix)
+
+MAVROS's `vision_pose_estimate` plugin has a known bug (upstream, never fixed) where yaw gets
+clamped to `[0, π]` for headings in the south/west half of the compass. A fork,
+`git@github.com:odraudE31/mavros.git` (branch `fix/vision-pose-yaw-clamping`), fixes it. It's built
+as an overlay in `~/sky_ws2` — apt MAVROS is untouched unless you opt in. See
+`../../docs/mavros_patched.md` (workspace `docs/mavros_patched.md`) for build/verify/revert steps.
+
 ## Testing without hardware
 
 **Terminal 1:**
