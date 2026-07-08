@@ -17,7 +17,7 @@
 
 **No vision_speed publisher (removed 2026-07-01).** The ZED wrapper's `publishOdom()` never fills `twist`, so `msg.twist.twist.linear` is always exactly zero regardless of real motion. Forwarding that as `VISION_SPEED_ESTIMATE` would tell the EKF "velocity = 0" confidently even during real motion — worse than omitting it. `vision_speed` was also removed from `config/apm_pluginlists_vision.yaml`'s plugin allowlist. `EK3_SRC1_VELXY` must be `0` (None) on the FC, not `6`.
 
-**No `/mavros/estimator_status` subscription and no `set_home` service client exist in this file** (verified against `sky_vision2/zed_mavros_bridge.py` 2026-07-01) — that logic was removed from the bridge and now lives in a separate node, `ekf_home_watchdog` (see `.claude/rules/ekf_home_watchdog.md`).
+**No `/mavros/estimator_status` subscription and no `set_home` service client exist in this file** (verified against `sky_vision2/zed_mavros_bridge.py` 2026-07-01) — that logic was removed from the bridge. Home-setting is now done on the FC by `indoor_2026/fc_scripts/ekf_set_home.lua` (Lua). (A ROS-side `ekf_home_watchdog` node briefly held this logic; it was removed 2026-07-08 in favour of the Lua script.)
 
 ### Why the default topic is `/mavros/mavros/pose`, not `/mavros/vision_pose/pose`
 
@@ -47,13 +47,13 @@ Confirmed operationally correct in a live hardware run (EKF3 aligned yaw, used e
 
 `.claude/rules/yaw_frame_research.md` describes an **older/superseded architecture** (MAVROS auto ENU→NED via `vision_pose_estimate` plugin's built-in conversion, +π/2 quaternion offset applied by the bridge). That no longer matches the current `_odom_cb` implementation — kept for historical background only, not as a behavior reference.
 
-## EKF home-setting watchdog lives in a separate node
+## EKF home-setting is done on the FC (Lua), not in this bridge
 
 Earlier versions of this bridge subscribed to `/mavros/estimator_status` and called `/mavros/mavros/set_home` once EKF health looked good. Both were removed from `zed_mavros_bridge.py` because `/mavros/estimator_status` is fed by ArduPilot's `EKF_STATUS_REPORT` MAVLink message at whatever rate `SR2_EXTRA3` specifies — defaults to `0` on Telem2, so the topic never actually publishes new data.
 
-Home-setting is now handled by a dedicated node, `ekf_home_watchdog` — see `.claude/rules/ekf_home_watchdog.md`. It does not depend on `estimator_status`.
+Home-setting is now done on the flight controller by `indoor_2026/fc_scripts/ekf_set_home.lua` (requires an SD card + `SCR_ENABLE=1`). A short-lived ROS-side `ekf_home_watchdog` node held this logic between 2026-07-01 and 2026-07-08, then was removed in favour of the Lua script.
 
-**Keep the drone stationary for the first ~20 s after launch** so the EKF converges cleanly before the watchdog's stability window starts counting.
+**Keep the drone stationary for the first ~20 s after launch** so the EKF converges cleanly before the Lua script's stability window starts counting.
 
 ## Bridge exclusivity
 

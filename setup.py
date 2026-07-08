@@ -33,7 +33,6 @@ setup(
             'main = sky_vision2.main:main',
             'zed_mavros_bridge = sky_vision2.zed_mavros_bridge:main',
             'test_zed_odom = sky_vision2.test_zed_odom:main',
-            'ekf_home_watchdog = sky_vision2.ekf_home_watchdog:main',
         ],
     },
 )

@@ -74,13 +74,6 @@ def generate_launch_description():
         }],
     )
 
-    watchdog_node = Node(
-        package='sky_vision2',
-        executable='ekf_home_watchdog',
-        name='ekf_home_watchdog',
-        output='screen',
-    )
-
     return LaunchDescription([
         domain_id,
         no_shm,
@@ -88,5 +81,4 @@ def generate_launch_description():
         zed_odom_topic_arg,
         mavros_node,
         bridge_node,
-        watchdog_node,
     ])

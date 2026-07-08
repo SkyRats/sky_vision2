@@ -88,13 +88,6 @@ def generate_launch_description():
         }],
     )
 
-    watchdog_node = Node(
-        package='sky_vision2',
-        executable='ekf_home_watchdog',
-        name='ekf_home_watchdog',
-        output='screen',
-    )
-
     zed_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('zed_wrapper'), 'launch', 'zed_camera.launch.py'])
@@ -111,5 +104,4 @@ def generate_launch_description():
         zed_launch,
         mavros_node,
         bridge_node,
-        watchdog_node,
     ])
