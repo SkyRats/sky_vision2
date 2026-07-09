@@ -36,16 +36,20 @@ rm -f /dev/shm/fastrtps_*
 ros2 launch sky_vision2 zed_mavros_sitl.launch.py fcu_url:=tcp://127.0.0.1:5760
 ```
 
-## MAVROS plugin allowlist (`config/apm_pluginlists_vision.yaml`, verified 2026-07-01)
+## MAVROS plugin allowlist (`config/apm_pluginlists_vision.yaml`)
 
 ```
 sys_status, sys_time, command, local_position, global_position,
-home_position, imu, vision_pose
+home_position, imu, vision_pose, setpoint_position, setpoint_velocity
 ```
 
-`vision_pose` consumes the bridge's pose topic (default `/mavros/mavros/pose` — see `.claude/rules/bridge_node.md` for why) → `VISION_POSITION_ESTIMATE` MAVLink message.
+`vision_pose` receives the bridge's output at `/mavros/vision_pose/pose` → `VISION_POSITION_ESTIMATE`.
 
-`vision_speed` was removed from the allowlist 2026-07-01 — the bridge no longer publishes vision_speed at all (ZED wrapper never populates `Odometry.twist`, so it would only ever be a false zero-velocity measurement). `mocap_pose_estimate` was never actually used by this package's real config despite older docs suggesting otherwise — this repo consistently uses plain `vision_pose`.
+`setpoint_position` and `setpoint_velocity` expose `/mavros/setpoint_position/local` and
+`/mavros/setpoint_velocity/cmd_vel`, needed by missions that use `sky_navigation.drone.Drone`.
+These are safe to include with `namespace='mavros'` (each plugin uses its own sub-namespace,
+no topic-type conflicts). They were omitted earlier when `name='mavros'` was incorrectly
+used in launch files (causing namespace collision with `local_position` on the `local` topic).
 
 ## Required ArduPilot FCU parameters
 
@@ -69,8 +73,9 @@ After launching, in a new terminal with `export ROS_DOMAIN_ID=42`:
 ```bash
 ros2 topic echo /mavros/state --once          # connected: True
 ros2 topic hz /zed/zed_node/odom             # ~30 Hz (after ~15 s warm-up)
-ros2 topic hz /mavros/mavros/pose            # ~30 Hz
-# Bridge log must show: "Vision data flowing — ready to arm once EKF converges"
+ros2 topic hz /mavros/vision_pose/pose       # ~30 Hz
+ros2 topic hz /mavros/local_position/pose    # ~10 Hz (after EKF origin set)
+# Bridge log: "Vision data flowing — ready to arm once EKF converges"
 ```
 
 ## Workspace

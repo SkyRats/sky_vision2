@@ -63,7 +63,7 @@ def generate_launch_description():
     mavros_node = Node(
         package='mavros',
         executable='mavros_node',
-        name='mavros',
+        namespace='mavros',
         output='screen',
         parameters=[
             pluginlists_yaml,

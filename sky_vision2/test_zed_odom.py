@@ -14,7 +14,7 @@ Usage (3 terminals):
     ros2 run sky_vision2 test_zed_odom
 
     # Terminal 3 — verify output:
-    ros2 topic echo /mavros/mavros/pose
+    ros2 topic echo /mavros/vision_pose/pose
 """
 
 import math
@@ -67,7 +67,7 @@ class ZedOdomPublisher(Node):
         angle = self.OMEGA * self._t
         x = self.RADIUS * math.cos(angle)
         y = self.RADIUS * math.sin(angle)
-        z = 0.5 * self._t  # slow climb
+        z = 1.0  # fixed altitude for repeatable SITL testing
 
         msg.pose.pose.position = Point(x=x, y=y, z=z)
         msg.pose.pose.orientation = _yaw_to_quaternion(angle + math.pi / 2)
@@ -91,10 +91,10 @@ class BridgeVerifier(Node):
         self._pose_count = 0
 
         self._pose_sub = self.create_subscription(
-            PoseStamped, '/mavros/mavros/pose', self._pose_cb, 10
+            PoseStamped, '/mavros/vision_pose/pose', self._pose_cb, 10
         )
         self._check_timer = self.create_timer(5.0, self._report)
-        self.get_logger().info('Verifier listening on /mavros/mavros/pose')
+        self.get_logger().info('Verifier listening on /mavros/vision_pose/pose')
 
     def _pose_cb(self, msg: PoseStamped):
         self._pose_count += 1

@@ -39,14 +39,18 @@ class ZedMavrosBridge(Node):
         super().__init__('zed_mavros_bridge')
 
         self.declare_parameter('zed_odom_topic', '/zed/zed_node/odom')
-        self.declare_parameter('mavros_vision_pose_topic', '/mavros/mavros/pose')
+        self.declare_parameter('mavros_vision_pose_topic', '/mavros/vision_pose/pose')
 
         zed_topic  = self.get_parameter('zed_odom_topic').get_parameter_value().string_value
         pose_topic = self.get_parameter('mavros_vision_pose_topic').get_parameter_value().string_value
 
-        # Correction quaternion (pure Z); set on first odom message via _auto_zero_yaw().
+        # Correction quaternion (pure Z) and matching position rotation; set on first odom
+        # message via _auto_zero_yaw(). Position must use the same rotation angle as
+        # orientation so the EKF sees a geometrically consistent pose at all yaw values.
         self._corr_z = 0.0
         self._corr_w = 1.0
+        self._pos_cos = 0.0   # cos(pi/2) = 0 — default matches yaw_initial=0
+        self._pos_sin = 1.0   # sin(pi/2) = 1
         self._yaw_zeroed = False
 
         sensor_qos = QoSProfile(

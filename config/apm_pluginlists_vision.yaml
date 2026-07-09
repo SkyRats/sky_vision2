@@ -1,5 +1,4 @@
 # MAVROS plugin allowlist for ZED visual odometry pipeline.
-# Only load the plugins needed for ZED ENU odom → ArduPilot EKF3.
 /**:
   ros__parameters:
     plugin_allowlist:
@@ -11,3 +10,5 @@
       - home_position
       - imu
       - vision_pose
+      - setpoint_position
+      - setpoint_velocity
