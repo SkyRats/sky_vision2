@@ -19,10 +19,13 @@ colcon build --packages-select sky_vision2
 source install/setup.bash
 export ROS_DOMAIN_ID=42
 
-# Full hardware stack
+# Full hardware stack — with mavp2p (recommended)
+ros2 launch sky_vision2 mavros_mavp2p_fc.launch.py
+
+# Full hardware stack — ZED + MAVROS + bridge (direct serial, no mavp2p)
 ros2 launch sky_vision2 zed_mavros_fc.launch.py
 
-# MAVROS + bridge only (ZED already running)
+# MAVROS + bridge only (ZED already running, no mavp2p)
 ros2 launch sky_vision2 mavros_fc.launch.py
 
 # Offline test — no hardware needed
@@ -87,14 +90,42 @@ After MAVROS crashes or restarts, stale `/dev/shm/fastrtps_*` entries cause topi
 
 `sky_vision2` is the only package that should run `zed_mavros_bridge`. **Never run two instances simultaneously** — duplicate messages on `/mavros/vision_pose/pose` corrupt the EKF. Verify: `ros2 node list | grep zed_mavros_bridge` must show exactly one.
 
-## Launch arguments
+## Launch files
+
+| File | Starts | Notes |
+|------|--------|-------|
+| `mavros_mavp2p_fc.launch.py` | mavp2p + MAVROS + bridge | **Recommended** — fans FC link to 14551/14552 |
+| `zed_mavros_fc.launch.py` | ZED + MAVROS + bridge | Direct serial, no mavp2p |
+| `mavros_fc.launch.py` | MAVROS + bridge | Direct serial, no ZED |
+| `zed.launch.py` | ZED only | Camera test |
+
+### mavros_mavp2p_fc arguments
+
+| Argument | Default | Notes |
+|----------|---------|-------|
+| `mavp2p_source` | `serial:/dev/ttyACM0:921600` | USB ACM; use `serial:/dev/ttyTHS1:921600` for UART or `tcpc://127.0.0.1:5760` for SITL |
+| `zed_odom_topic` | `/zed/zed_node/odom` | ZED odom topic |
+
+MAVROS connects to mavp2p at `udp://127.0.0.1:0@127.0.0.1:14551`. The `sky_navigation`
+`Drone` class connects to `udpout:127.0.0.1:14552`. Both endpoints are UDP servers
+(`udps`) so each client heartbeats first and mavp2p learns the return address.
+
+### zed_mavros_fc / mavros_fc arguments
 
 | Argument | Default | Notes |
 |----------|---------|-------|
 | `fcu_url` | `/dev/ttyTHS1:921600` | Jetson Telem2 UART; use `tcp://127.0.0.1:5760` for SITL |
 | `camera_model` | `zed2i` | ZED model string |
 | `zed_odom_topic` | `/zed/zed_node/odom` | ZED odom topic |
-| `yaw_offset_rad` | `-1.5708` (−90°) | Zeroes ZED's initial heading — see Frame convention below |
+
+### MAVROS plugin allowlist (`config/apm_pluginlists_vision.yaml`)
+
+Active plugins: `sys_status`, `sys_time`, `command`, `local_position`, `global_position`,
+`home_position`, `imu`, `vision_pose`
+
+`setpoint_position` and `setpoint_velocity` are intentionally **absent** — all movement
+commands go via pymavlink through mavp2p:14552, not via MAVROS topics. Adding them back
+creates a dual-commander risk.
 
 ## Required ArduPilot FCU parameters
 

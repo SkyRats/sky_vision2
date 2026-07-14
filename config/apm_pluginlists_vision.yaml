@@ -10,5 +10,3 @@
       - home_position
       - imu
       - vision_pose
-      - setpoint_position
-      - setpoint_velocity

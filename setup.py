@@ -14,11 +14,13 @@ setup(
             'launch/zed_mavros_sitl.launch.py',
             'launch/zed_mavros_fc.launch.py',
             'launch/mavros_fc.launch.py',
+            'launch/mavros_mavp2p_fc.launch.py',
             'launch/zed.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/apm_pluginlists_vision.yaml',
             'config/fastdds_no_shm.xml',
+            'config/mavp2p.service',
         ]),
     ],
     install_requires=['setuptools'],

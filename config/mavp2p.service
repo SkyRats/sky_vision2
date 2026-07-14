@@ -1,0 +1,14 @@
+[Unit]
+Description=mavp2p MAVLink router — fans FC serial link to UDP endpoints 14551/14552
+After=network.target
+
+[Service]
+# Adjust ExecStart for your FC device:
+#   USB ACM:   serial:/dev/ttyACM0:921600
+#   UART THS1: serial:/dev/ttyTHS1:921600
+ExecStart=/usr/local/bin/mavp2p serial:/dev/ttyACM0:921600 udps:127.0.0.1:14551 udps:127.0.0.1:14552
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
