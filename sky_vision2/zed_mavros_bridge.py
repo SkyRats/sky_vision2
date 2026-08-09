@@ -95,10 +95,12 @@ class ZedMavrosBridge(Node):
     def _odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
 
-        # ZED observed axes: X=East, Y=North, Z=Down
-        # NED target:        X=North, Y=East, Z=Down
-        # Position/velocity: swap X and Y (no negation needed)
-        # Quaternion: pass through, then apply yaw offset only
+        # Output stays in ENU. MAVROS's vision_pose plugin does the ENU->NED
+        # conversion downstream (ftf::transform_frame_enu_ned, no APM branch) —
+        # do not convert here or it happens twice.
+        # Position: rotate about Z within ENU, (x, y, z) -> (-y, x, z) at +90 deg.
+        #   z is a straight pass-through, which is what proves the output is ENU.
+        # Quaternion: pass through, then apply the same yaw offset.
         qx = msg.pose.pose.orientation.x
         qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
@@ -117,8 +119,8 @@ class ZedMavrosBridge(Node):
         pose_msg = PoseStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = 'map'
-        pose_msg.pose.position.x = -msg.pose.pose.position.y   # North
-        pose_msg.pose.position.y =  msg.pose.pose.position.x   # East
+        pose_msg.pose.position.x = -msg.pose.pose.position.y   # ENU East
+        pose_msg.pose.position.y =  msg.pose.pose.position.x   # ENU North
         pose_msg.pose.position.z = msg.pose.pose.position.z
         pose_msg.pose.orientation.x = ox
         pose_msg.pose.orientation.y = oy
